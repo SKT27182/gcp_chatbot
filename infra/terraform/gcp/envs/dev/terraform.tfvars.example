@@ -1,0 +1,8 @@
+project_id  = "replace-with-project-id"
+region      = "asia-south1"
+environment = "dev"
+
+# Optional overrides (defaults in variables.tf):
+# app_name = "chatbot"
+# cloud_run_image is set by make deploy-backend (-var), not required here
+# secret_ids = ["litellm-api-key"]  # values via make push-secrets (API-key models only)

@@ -1,5 +1,8 @@
+# Inputs for envs/dev — set real values in terraform.tfvars (project_id, …).
+# Defaults cover learning/dev; deploy-backend overrides cloud_run_image + additional_env_vars.
+
 variable "project_id" {
-  description = "GCP project ID"
+  description = "GCP project ID (must match root .env GCP_PROJECT_ID)"
   type        = string
 }
 
@@ -22,29 +25,33 @@ variable "region" {
 }
 
 variable "firestore_location" {
-  description = "Firestore location_id (defaults to region)"
+  description = "Firestore location_id; empty string ⇒ use var.region"
   type        = string
   default     = ""
 }
 
 variable "firestore_database" {
-  type    = string
-  default = "(default)"
+  description = "Must be '(default)' for the default DB (include parentheses)"
+  type        = string
+  default     = "(default)"
 }
 
 variable "artifact_repo" {
-  type    = string
-  default = "gcp-chatbot"
+  description = "Artifact Registry repository id"
+  type        = string
+  default     = "gcp-chatbot"
 }
 
 variable "runtime_service_account_id" {
-  type    = string
-  default = "gcp-chatbot-run"
+  description = "Short SA name created by modules/iam"
+  type        = string
+  default     = "gcp-chatbot-run"
 }
 
 variable "cloud_run_service" {
-  type    = string
-  default = "gcp-chatbot-api"
+  description = "Cloud Run service name"
+  type        = string
+  default     = "gcp-chatbot-api"
 }
 
 variable "cloud_run_image" {
@@ -60,8 +67,9 @@ variable "additional_env_vars" {
 }
 
 variable "allow_unauthenticated" {
-  type    = bool
-  default = true
+  description = "Public Cloud Run invoker (Phase-1 learning)"
+  type        = bool
+  default     = true
 }
 
 variable "max_instances" {

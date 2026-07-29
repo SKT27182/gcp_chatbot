@@ -10,6 +10,8 @@ class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     app: str
     environment: str
+    model: str | None = None
+
 
 
 class ChatRequest(BaseModel):
@@ -34,3 +36,14 @@ class ChatMessage(BaseModel):
 class SessionHistoryResponse(BaseModel):
     session_id: str
     messages: list[ChatMessage]
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    title: str
+    preview: str = ""
+    updated_at: datetime | None = None
+
+
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary]

@@ -1,23 +1,56 @@
-import { useMutation } from "@tanstack/react-query"
-import { Loader2, RotateCcw, SendHorizontal } from "lucide-react"
-import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react"
-import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { ArrowUp, Loader2 } from "lucide-react"
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { ChatSidebar } from "@/features/chat/ChatSidebar"
 import { MessageList } from "@/features/chat/MessageList"
-import { postChat } from "@/lib/api"
-import { useChatStore } from "@/stores/chatStore"
+import { getHealth, getSession, listSessions, postChat } from "@/lib/api"
+import { buildLocalSessionSummary, useChatStore } from "@/stores/chatStore"
 
 export function ChatPage() {
+  const queryClient = useQueryClient()
   const {
     sessionId,
     messages,
     draft,
+    sessions,
+    sidebarOpen,
     setDraft,
     setSessionId,
     addMessage,
+    setSessions,
+    upsertSession,
+    setSidebarOpen,
     resetConversation,
+    loadConversation,
   } = useChatStore()
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const healthQuery = useQuery({
+    queryKey: ["health"],
+    queryFn: getHealth,
+    staleTime: 60_000,
+  })
+
+  const activeModelName = useMemo(() => {
+    const rawModel = healthQuery.data?.model || "vertex_ai/gemini-3.5-flash-lite"
+    return rawModel.replace(/^(vertex_ai\/|gemini\/)/, "")
+  }, [healthQuery.data])
+
+  const sessionsQuery = useQuery({
+    queryKey: ["sessions"],
+    queryFn: listSessions,
+    staleTime: 15_000,
+    retry: 1,
+  })
+
+  useEffect(() => {
+    if (sessionsQuery.data) {
+      setSessions(sessionsQuery.data)
+    }
+  }, [sessionsQuery.data, setSessions])
 
   const mutation = useMutation({
     mutationFn: async (message: string) => postChat(message, sessionId),
@@ -26,6 +59,8 @@ export function ChatPage() {
       addMessage({ role: "assistant", content: data.reply })
       setSessionId(data.session_id)
       setDraft("")
+      upsertSession(buildLocalSessionSummary(data.session_id, message, data.reply))
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] })
     },
   })
 
@@ -33,97 +68,137 @@ export function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, mutation.isPending])
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  function handleSubmit(event?: FormEvent<HTMLFormElement>) {
+    if (event) event.preventDefault()
     const message = draft.trim()
-    if (!message || mutation.isPending) {
-      return
-    }
+    if (!message || mutation.isPending) return
     mutation.mutate(message)
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
-      const message = draft.trim()
-      if (!message || mutation.isPending) {
-        return
-      }
-      mutation.mutate(message)
+      handleSubmit()
     }
   }
 
+  function handlePromptSelect(promptText: string) {
+    if (mutation.isPending) return
+    mutation.mutate(promptText)
+  }
+
+  async function handleSelectSession(id: string) {
+    if (id === sessionId || loadingSessionId) return
+    setLoadError(null)
+    setLoadingSessionId(id)
+    try {
+      const history = await getSession(id)
+      loadConversation(
+        history.session_id,
+        history.messages
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+      )
+      mutation.reset()
+      if (window.matchMedia("(max-width: 767px)").matches) {
+        setSidebarOpen(false)
+      }
+    } catch (error) {
+      setLoadError((error as Error).message || "Failed to load chat")
+    } finally {
+      setLoadingSessionId(null)
+    }
+  }
+
+  function handleNewChat() {
+    resetConversation()
+    mutation.reset()
+    setLoadError(null)
+    if (window.matchMedia("(max-width: 767px)").matches) {
+      setSidebarOpen(false)
+    }
+  }
+
+  const displaySessions = sessionsQuery.data ?? sessions
+
   return (
-    <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-4 py-6 sm:px-6">
-      <header className="mb-4 flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">
-            GCP Chatbot
-          </p>
-          <h1 className="font-display text-3xl tracking-tight text-foreground">
-            Phase-1 Q/A
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            FastAPI + LiteLLM + Firestore history
-          </p>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            resetConversation()
-            mutation.reset()
-          }}
-        >
-          <RotateCcw className="h-4 w-4" />
-          New chat
-        </Button>
-      </header>
+    <div className="flex h-full min-h-0 bg-background text-foreground">
+      <ChatSidebar
+        open={sidebarOpen}
+        sessions={displaySessions}
+        activeSessionId={sessionId}
+        loadingSessionId={loadingSessionId}
+        onNewChat={handleNewChat}
+        onSelectSession={(id) => void handleSelectSession(id)}
+        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+      />
 
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-card/80 shadow-sm backdrop-blur">
-        <MessageList messages={messages} isPending={mutation.isPending} />
-        <div ref={bottomRef} />
+      <div className="relative flex min-w-0 flex-1 flex-col h-full overflow-hidden">
 
-        <form
-          onSubmit={handleSubmit}
-          className="border-t border-border bg-card/90 p-4"
-        >
-          {mutation.isError ? (
-            <p className="mb-3 text-sm text-destructive">
-              {(mutation.error as Error).message || "Failed to send message"}
-            </p>
-          ) : null}
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <Textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
-              disabled={mutation.isPending}
-              className="min-h-[96px] resize-none"
-            />
-            <Button
-              type="submit"
-              size="lg"
-              disabled={mutation.isPending || !draft.trim()}
-              className="sm:min-w-28"
+
+        {/* Chat Messages */}
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <MessageList
+            messages={messages}
+            isPending={mutation.isPending}
+            onSelectPrompt={handlePromptSelect}
+          />
+          <div ref={bottomRef} />
+        </main>
+
+        {/* Floating Input Area */}
+        <footer className="w-full shrink-0 pb-4 pt-2 px-3 sm:px-4">
+          <div className="mx-auto max-w-3xl">
+            {mutation.isError ? (
+              <p className="mb-2 text-center text-xs text-destructive">
+                {(mutation.error as Error).message || "Failed to send message"}
+              </p>
+            ) : null}
+            {loadError ? (
+              <p className="mb-2 text-center text-xs text-destructive">{loadError}</p>
+            ) : null}
+
+            <form
+              onSubmit={handleSubmit}
+              className="relative flex flex-col rounded-2xl border border-border/80 bg-card p-3 shadow-lg transition-all focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/40"
             >
-              {mutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <SendHorizontal className="h-4 w-4" />
-              )}
-              Send
-            </Button>
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Type your message here..."
+                rows={1}
+                disabled={mutation.isPending || Boolean(loadingSessionId)}
+                className="w-full resize-none border-0 bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-0 min-h-[44px] max-h-[160px]"
+              />
+
+              <div className="flex items-center justify-between pt-2 px-1 border-t border-border/30">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                    {activeModelName}
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={mutation.isPending || !draft.trim() || Boolean(loadingSessionId)}
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all hover:bg-primary/90 disabled:opacity-30 disabled:hover:bg-primary"
+                  title="Send message"
+                >
+                  {mutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ArrowUp className="h-4 w-4 stroke-[2.5]" />
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
-          {sessionId ? (
-            <p className="mt-2 truncate text-xs text-muted-foreground">
-              Session: {sessionId}
-            </p>
-          ) : null}
-        </form>
-      </section>
+        </footer>
+      </div>
     </div>
   )
 }
+

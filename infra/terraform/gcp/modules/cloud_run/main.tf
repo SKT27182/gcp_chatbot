@@ -1,3 +1,6 @@
+# Cloud Run service = HTTPS backend that runs the FastAPI container.
+# Identity: service_account_email (IAM module). Image: from Artifact Registry after deploy.
+
 variable "project_id" {
   description = "GCP project ID"
   type        = string
@@ -15,23 +18,23 @@ variable "service_name" {
 }
 
 variable "image" {
-  description = "Container image URL"
+  description = "Full container image URL (…-docker.pkg.dev/…/api:tag)"
   type        = string
 }
 
 variable "service_account_email" {
-  description = "Runtime service account email"
+  description = "Runtime SA email — container calls Firestore/Vertex AS this identity"
   type        = string
 }
 
 variable "env_vars" {
-  description = "Plain (non-secret) environment variables"
+  description = "Plain (non-secret) environment variables injected into the container"
   type        = map(string)
   default     = {}
 }
 
 variable "secret_env_vars" {
-  description = "Map of ENV_VAR_NAME => Secret Manager secret_id (mounted as latest)"
+  description = "Map of ENV_VAR_NAME => Secret Manager secret_id (mounted as version latest)"
   type        = map(string)
   default     = {}
 }
@@ -43,14 +46,15 @@ variable "labels" {
 }
 
 variable "allow_unauthenticated" {
-  description = "Allow public invoke (learning only; lock down in Phase 2)"
+  description = "If true, anyone on the internet can invoke the URL (Phase-1 learning; lock down later)"
   type        = bool
   default     = true
 }
 
 variable "min_instances" {
-  type    = number
-  default = 0
+  description = "0 = scale to zero when idle (cheap for learning)"
+  type        = number
+  default     = 0
 }
 
 variable "max_instances" {
@@ -72,14 +76,16 @@ resource "google_cloud_run_v2_service" "api" {
   project  = var.project_id
   name     = var.service_name
   location = var.location
-  ingress  = "INGRESS_TRAFFIC_ALL"
+  ingress  = "INGRESS_TRAFFIC_ALL" # reachable from the public internet (still needs invoker IAM)
 
-  # Allow terraform destroy / make tf-destroy (provider default is true)
+  # Allow terraform destroy / make tf-destroy (provider default is true = blocked)
   deletion_protection = false
 
   labels = var.labels
 
+  # New revisions use this template
   template {
+    # THIS is what ties Cloud Run → Firestore/Vertex: run as the IAM module's SA
     service_account = var.service_account_email
     labels          = var.labels
 
@@ -92,7 +98,7 @@ resource "google_cloud_run_v2_service" "api" {
       image = var.image
 
       ports {
-        container_port = 8080
+        container_port = 8080 # must match Dockerfile / uvicorn
       }
 
       resources {
@@ -102,6 +108,7 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
+      # Plain env (GCP_PROJECT_ID, LITELLM_MODEL, …)
       dynamic "env" {
         for_each = var.env_vars
         content {
@@ -110,7 +117,7 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
-      # Mount secrets from Secret Manager
+      # Secret env: value comes from Secret Manager (not visible as plain text in TF env map)
       dynamic "env" {
         for_each = var.secret_env_vars
         content {
@@ -126,12 +133,14 @@ resource "google_cloud_run_v2_service" "api" {
     }
   }
 
+  # Send all traffic to the newest revision
   traffic {
     type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
     percent = 100
   }
 }
 
+# Who may call the HTTPS URL? allUsers = public (browser SPA without Google login).
 resource "google_cloud_run_v2_service_iam_member" "public" {
   count = var.allow_unauthenticated ? 1 : 0
 
@@ -143,7 +152,8 @@ resource "google_cloud_run_v2_service_iam_member" "public" {
 }
 
 output "service_uri" {
-  value = google_cloud_run_v2_service.api.uri
+  description = "HTTPS base URL — set as VITE_API_BASE_URL in frontend/.env"
+  value       = google_cloud_run_v2_service.api.uri
 }
 
 output "service_name" {

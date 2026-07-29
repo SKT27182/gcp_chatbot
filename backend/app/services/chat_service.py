@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from app.core.config import Settings
 from app.providers.llm.base import LLMClient
 from app.providers.store.base import ChatStore
-from app.schema import ChatMessage, ChatRequest, ChatResponse, SessionHistoryResponse
+from app.schema import ChatMessage, ChatRequest, ChatResponse, SessionHistoryResponse, SessionListResponse, SessionSummary
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -62,3 +62,7 @@ class ChatService:
             limit=self._settings.chat_history_limit,
         )
         return SessionHistoryResponse(session_id=session_id, messages=messages)
+
+    async def list_sessions(self, *, limit: int = 50) -> SessionListResponse:
+        sessions: list[SessionSummary] = await self._store.list_sessions(limit=limit)
+        return SessionListResponse(sessions=sessions)

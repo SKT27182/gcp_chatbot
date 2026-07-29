@@ -26,6 +26,7 @@ class _FakeLLM:
 class _FakeStore:
     def __init__(self) -> None:
         self._sessions: dict[str, list[ChatMessage]] = {}
+        self._meta: dict[str, dict] = {}
 
     async def get_messages(self, session_id: str, *, limit: int) -> list[ChatMessage]:
         return self._sessions.get(session_id, [])[-limit:]
@@ -40,6 +41,30 @@ class _FakeStore:
                     created_at=message.created_at or datetime.now(UTC),
                 )
             )
+        meta = self._meta.setdefault(session_id, {})
+        if "title" not in meta:
+            first_user = next((m for m in messages if m.role == "user"), None)
+            if first_user:
+                meta["title"] = first_user.content[:60]
+        if messages:
+            meta["preview"] = messages[-1].content[:80]
+        meta["updated_at"] = datetime.now(UTC)
+
+    async def list_sessions(self, *, limit: int = 50):
+        from app.schema import SessionSummary
+
+        items = []
+        for session_id, meta in self._meta.items():
+            items.append(
+                SessionSummary(
+                    session_id=session_id,
+                    title=str(meta.get("title") or "New chat"),
+                    preview=str(meta.get("preview") or ""),
+                    updated_at=meta.get("updated_at"),
+                )
+            )
+        items.sort(key=lambda s: s.updated_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+        return items[:limit]
 
 
 @pytest.fixture
@@ -92,3 +117,10 @@ def test_chat_creates_session_and_follow_up(client: TestClient) -> None:
     assert len(messages) == 4
     assert messages[0]["role"] == "user"
     assert messages[0]["content"] == "Hello"
+
+    listed = client.get("/sessions")
+    assert listed.status_code == 200
+    sessions = listed.json()["sessions"]
+    assert len(sessions) >= 1
+    assert sessions[0]["session_id"] == session_id
+    assert "Hello" in sessions[0]["title"]

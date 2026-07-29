@@ -8,6 +8,18 @@ export type ChatResponse = {
   reply: string
 }
 
+export type SessionSummary = {
+  session_id: string
+  title: string
+  preview: string
+  updated_at: string | null
+}
+
+export type SessionHistoryResponse = {
+  session_id: string
+  messages: ChatMessage[]
+}
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
   /\/$/,
   "",
@@ -42,10 +54,37 @@ export async function postChat(message: string, sessionId: string | null): Promi
   return response.json() as Promise<ChatResponse>
 }
 
-export async function getHealth(): Promise<{ status: string }> {
+export async function listSessions(): Promise<SessionSummary[]> {
+  const response = await fetch(`${getApiBaseUrl()}/sessions`)
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new Error(detail || `Failed to list sessions (${response.status})`)
+  }
+  const body = (await response.json()) as { sessions: SessionSummary[] }
+  return body.sessions
+}
+
+export async function getSession(sessionId: string): Promise<SessionHistoryResponse> {
+  const response = await fetch(`${getApiBaseUrl()}/sessions/${encodeURIComponent(sessionId)}`)
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new Error(detail || `Failed to load session (${response.status})`)
+  }
+  return response.json() as Promise<SessionHistoryResponse>
+}
+
+export type HealthResponse = {
+  status: string
+  app: string
+  environment: string
+  model?: string
+}
+
+export async function getHealth(): Promise<HealthResponse> {
   const response = await fetch(`${getApiBaseUrl()}/health`)
   if (!response.ok) {
     throw new Error(`Health check failed (${response.status})`)
   }
-  return response.json() as Promise<{ status: string }>
+  return response.json() as Promise<HealthResponse>
 }
+

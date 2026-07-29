@@ -1,3 +1,6 @@
+# Firestore Native database for chat session history.
+# The FastAPI app reads/writes via the Cloud Run service account (roles/datastore.user).
+
 variable "project_id" {
   description = "GCP project ID"
   type        = string
@@ -9,7 +12,7 @@ variable "location" {
 }
 
 variable "database_id" {
-  description = "Firestore database ID"
+  description = "Firestore database ID. '(default)' is GCP's special default DB name — keep the parentheses."
   type        = string
   default     = "(default)"
 }
@@ -22,8 +25,9 @@ resource "google_firestore_database" "chat" {
   project     = var.project_id
   name        = var.database_id
   location_id = var.location
-  type        = "FIRESTORE_NATIVE"
+  type        = "FIRESTORE_NATIVE" # document DB (not Datastore mode)
 
+  # Allow terraform destroy / make tf-destroy to remove this DB
   delete_protection_state = "DELETE_PROTECTION_DISABLED"
   deletion_policy         = "DELETE"
 }

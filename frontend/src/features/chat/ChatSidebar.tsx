@@ -1,11 +1,13 @@
 import { useState, useMemo } from "react"
 import {
+  Loader2,
   MessageSquarePlus,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
   Sun,
+  Trash2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -17,8 +19,10 @@ type ChatSidebarProps = {
   sessions: SessionSummary[]
   activeSessionId: string | null
   loadingSessionId: string | null
+  deletingSessionId: string | null
   onNewChat: () => void
   onSelectSession: (sessionId: string) => void
+  onDeleteSession: (sessionId: string) => void
   onToggleSidebar: () => void
 }
 
@@ -70,8 +74,10 @@ export function ChatSidebar({
   sessions,
   activeSessionId,
   loadingSessionId,
+  deletingSessionId,
   onNewChat,
   onSelectSession,
+  onDeleteSession,
   onToggleSidebar,
 }: ChatSidebarProps) {
   const { theme, toggleTheme } = useThemeStore()
@@ -189,7 +195,9 @@ export function ChatSidebar({
                         session={session}
                         active={session.session_id === activeSessionId}
                         loading={session.session_id === loadingSessionId}
+                        deleting={session.session_id === deletingSessionId}
                         onSelect={onSelectSession}
+                        onDelete={onDeleteSession}
                       />
                     ))}
                   </ul>
@@ -208,7 +216,9 @@ export function ChatSidebar({
                         session={session}
                         active={session.session_id === activeSessionId}
                         loading={session.session_id === loadingSessionId}
+                        deleting={session.session_id === deletingSessionId}
                         onSelect={onSelectSession}
+                        onDelete={onDeleteSession}
                       />
                     ))}
                   </ul>
@@ -227,7 +237,9 @@ export function ChatSidebar({
                         session={session}
                         active={session.session_id === activeSessionId}
                         loading={session.session_id === loadingSessionId}
+                        deleting={session.session_id === deletingSessionId}
                         onSelect={onSelectSession}
+                        onDelete={onDeleteSession}
                       />
                     ))}
                   </ul>
@@ -282,27 +294,49 @@ function SessionItem({
   session,
   active,
   loading,
+  deleting,
   onSelect,
+  onDelete,
 }: {
   session: SessionSummary
   active: boolean
   loading: boolean
+  deleting: boolean
   onSelect: (id: string) => void
+  onDelete: (id: string) => void
 }) {
   return (
-    <li>
+    <li className="group relative">
       <button
         type="button"
         onClick={() => onSelect(session.session_id)}
+        disabled={deleting}
         className={cn(
-          "w-full rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors truncate block",
+          "w-full rounded-lg py-1.5 pl-2.5 pr-8 text-left text-xs transition-colors",
           active
             ? "bg-sidebar-accent font-medium text-sidebar-foreground"
             : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
-          loading && "opacity-60",
+          (loading || deleting) && "opacity-60",
         )}
       >
-        <span className="truncate block">{session.title || "Untitled Chat"}</span>
+        <span className="block truncate">{session.title || "Untitled Chat"}</span>
+      </button>
+      <button
+        type="button"
+        title="Delete chat"
+        aria-label={`Delete ${session.title || "chat"}`}
+        disabled={deleting}
+        onClick={(event) => {
+          event.stopPropagation()
+          onDelete(session.session_id)
+        }}
+        className={cn(
+          "absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive",
+          "opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100",
+          deleting && "opacity-100",
+        )}
+      >
+        {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
       </button>
     </li>
   )

@@ -66,6 +66,13 @@ class _FakeStore:
         items.sort(key=lambda s: s.updated_at or datetime.min.replace(tzinfo=UTC), reverse=True)
         return items[:limit]
 
+    async def delete_session(self, session_id: str) -> bool:
+        if session_id not in self._sessions and session_id not in self._meta:
+            return False
+        self._sessions.pop(session_id, None)
+        self._meta.pop(session_id, None)
+        return True
+
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
@@ -124,3 +131,18 @@ def test_chat_creates_session_and_follow_up(client: TestClient) -> None:
     assert len(sessions) >= 1
     assert sessions[0]["session_id"] == session_id
     assert "Hello" in sessions[0]["title"]
+
+    # Title stays the first user message after follow-ups
+    third = client.post(
+        "/chat",
+        json={"session_id": session_id, "message": "A later message"},
+    )
+    assert third.status_code == 200
+    listed_again = client.get("/sessions")
+    titled = next(s for s in listed_again.json()["sessions"] if s["session_id"] == session_id)
+    assert titled["title"] == "Hello"
+
+    deleted = client.delete(f"/sessions/{session_id}")
+    assert deleted.status_code == 204
+    assert client.get("/sessions").json()["sessions"] == []
+    assert client.delete(f"/sessions/{session_id}").status_code == 404

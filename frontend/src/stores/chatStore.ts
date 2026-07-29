@@ -14,6 +14,8 @@ type ChatState = {
   addMessage: (message: ChatMessage) => void
   setSessions: (sessions: SessionSummary[]) => void
   upsertSession: (session: SessionSummary) => void
+  removeSession: (sessionId: string) => void
+  patchSession: (sessionId: string, patch: Partial<SessionSummary>) => void
   setSidebarOpen: (open: boolean) => void
   resetConversation: () => void
   loadConversation: (sessionId: string, messages: ChatMessage[]) => void
@@ -43,15 +45,34 @@ export const useChatStore = create<ChatState>()(
       setSessions: (sessions) => set({ sessions }),
       upsertSession: (session) =>
         set((state) => {
+          const existing = state.sessions.find((s) => s.session_id === session.session_id)
+          const merged: SessionSummary = {
+            ...session,
+            // Keep the first user query as the stable sidebar title.
+            title: existing?.title || session.title,
+          }
           const rest = state.sessions.filter((s) => s.session_id !== session.session_id)
           return {
-            sessions: [session, ...rest].sort((a, b) => {
+            sessions: [merged, ...rest].sort((a, b) => {
               const at = a.updated_at ? Date.parse(a.updated_at) : 0
               const bt = b.updated_at ? Date.parse(b.updated_at) : 0
               return bt - at
             }),
           }
         }),
+      removeSession: (sessionId) =>
+        set((state) => ({
+          sessions: state.sessions.filter((s) => s.session_id !== sessionId),
+          ...(state.sessionId === sessionId
+            ? { sessionId: null, messages: [], draft: "" }
+            : {}),
+        })),
+      patchSession: (sessionId, patch) =>
+        set((state) => ({
+          sessions: state.sessions.map((s) =>
+            s.session_id === sessionId ? { ...s, ...patch } : s,
+          ),
+        })),
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
       resetConversation: () =>
         set({
@@ -90,3 +111,5 @@ export function buildLocalSessionSummary(
     updated_at: new Date().toISOString(),
   }
 }
+
+export { titleFromMessage }

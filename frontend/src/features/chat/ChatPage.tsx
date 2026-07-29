@@ -3,8 +3,8 @@ import { ArrowUp, Loader2 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { ChatSidebar } from "@/features/chat/ChatSidebar"
 import { MessageList } from "@/features/chat/MessageList"
-import { getHealth, getSession, listSessions, postChat } from "@/lib/api"
-import { buildLocalSessionSummary, useChatStore } from "@/stores/chatStore"
+import { deleteSession, getHealth, getSession, listSessions, postChat } from "@/lib/api"
+import { buildLocalSessionSummary, titleFromMessage, useChatStore } from "@/stores/chatStore"
 
 export function ChatPage() {
   const queryClient = useQueryClient()
@@ -19,6 +19,8 @@ export function ChatPage() {
     addMessage,
     setSessions,
     upsertSession,
+    removeSession,
+    patchSession,
     setSidebarOpen,
     resetConversation,
     loadConversation,
@@ -26,6 +28,7 @@ export function ChatPage() {
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null)
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
   const healthQuery = useQuery({
@@ -84,7 +87,8 @@ export function ChatPage() {
 
   function handlePromptSelect(promptText: string) {
     if (mutation.isPending) return
-    mutation.mutate(promptText)
+    setDraft(promptText)
+    textareaRef.current?.focus()
   }
 
   async function handleSelectSession(id: string) {
@@ -93,12 +97,14 @@ export function ChatPage() {
     setLoadingSessionId(id)
     try {
       const history = await getSession(id)
-      loadConversation(
-        history.session_id,
-        history.messages
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-      )
+      const chatMessages = history.messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }))
+      loadConversation(history.session_id, chatMessages)
+      const firstUser = chatMessages.find((m) => m.role === "user")
+      if (firstUser) {
+        patchSession(history.session_id, { title: titleFromMessage(firstUser.content) })
+      }
       mutation.reset()
       if (window.matchMedia("(max-width: 767px)").matches) {
         setSidebarOpen(false)
@@ -119,6 +125,28 @@ export function ChatPage() {
     }
   }
 
+  async function handleDeleteSession(id: string) {
+    const title =
+      (sessionsQuery.data ?? sessions).find((s) => s.session_id === id)?.title || "this chat"
+    if (!window.confirm(`Delete “${title}”? This removes the whole conversation permanently.`)) {
+      return
+    }
+    setLoadError(null)
+    setDeletingSessionId(id)
+    try {
+      await deleteSession(id)
+      removeSession(id)
+      if (sessionId === id) {
+        mutation.reset()
+      }
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] })
+    } catch (error) {
+      setLoadError((error as Error).message || "Failed to delete chat")
+    } finally {
+      setDeletingSessionId(null)
+    }
+  }
+
   const displaySessions = sessionsQuery.data ?? sessions
 
   return (
@@ -128,8 +156,10 @@ export function ChatPage() {
         sessions={displaySessions}
         activeSessionId={sessionId}
         loadingSessionId={loadingSessionId}
+        deletingSessionId={deletingSessionId}
         onNewChat={handleNewChat}
         onSelectSession={(id) => void handleSelectSession(id)}
+        onDeleteSession={(id) => void handleDeleteSession(id)}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
       />
 

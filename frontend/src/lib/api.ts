@@ -73,6 +73,16 @@ export async function getSession(sessionId: string): Promise<SessionHistoryRespo
   return response.json() as Promise<SessionHistoryResponse>
 }
 
+export async function deleteSession(sessionId: string): Promise<void> {
+  const response = await fetch(`${getApiBaseUrl()}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  })
+  if (!response.ok && response.status !== 404) {
+    const detail = await response.text()
+    throw new Error(detail || `Failed to delete session (${response.status})`)
+  }
+}
+
 export type HealthResponse = {
   status: string
   app: string

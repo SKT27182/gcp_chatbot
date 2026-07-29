@@ -22,3 +22,7 @@ class ChatStore(Protocol):
     async def list_sessions(self, *, limit: int = 50) -> list[SessionSummary]:
         """Return recent sessions (newest first) for the sidebar."""
         ...
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session and all of its messages. Returns False if missing."""
+        ...

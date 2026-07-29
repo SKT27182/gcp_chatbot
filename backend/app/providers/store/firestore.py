@@ -121,3 +121,23 @@ class FirestoreChatStore:
                 )
             )
         return sessions
+
+    async def delete_session(self, session_id: str) -> bool:
+        session_ref = self._session_ref(session_id)
+        snap = await session_ref.get()
+        if not snap.exists:
+            return False
+
+        messages_ref = self._messages_ref(session_id)
+        while True:
+            docs = [doc async for doc in messages_ref.limit(400).stream()]
+            if not docs:
+                break
+            batch = self._client.batch()
+            for doc in docs:
+                batch.delete(doc.reference)
+            await batch.commit()
+
+        await session_ref.delete()
+        logger.info("Deleted session_id=%s", session_id)
+        return True

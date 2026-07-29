@@ -66,3 +66,9 @@ class ChatService:
     async def list_sessions(self, *, limit: int = 50) -> SessionListResponse:
         sessions: list[SessionSummary] = await self._store.list_sessions(limit=limit)
         return SessionListResponse(sessions=sessions)
+
+    async def delete_session(self, session_id: str) -> bool:
+        deleted = await self._store.delete_session(session_id)
+        if deleted:
+            logger.info("Deleted chat session_id=%s", session_id)
+        return deleted

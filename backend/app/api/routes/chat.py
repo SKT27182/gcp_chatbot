@@ -38,3 +38,15 @@ async def get_session(session_id: str, request: Request) -> SessionHistoryRespon
     except Exception as exc:
         logger.exception("Failed to load session history session_id=%s", session_id)
         raise HTTPException(status_code=500, detail="Failed to load session history") from exc
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def delete_session(session_id: str, request: Request) -> None:
+    service = request.app.state.chat_service
+    try:
+        deleted = await service.delete_session(session_id)
+    except Exception as exc:
+        logger.exception("Failed to delete session session_id=%s", session_id)
+        raise HTTPException(status_code=500, detail="Failed to delete session") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")

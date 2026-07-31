@@ -12,6 +12,7 @@ dependencies = [
     "google-cloud-firestore>=2.19.0",
     "google-auth>=2.36.0",
     "litellm>=1.93.0",
+    "firebase-admin>=7.5.0",
 ]
 
 [dependency-groups]

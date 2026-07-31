@@ -87,8 +87,17 @@ Cloud Run gets:
 
 `make deploy-backend` builds/pushes the image and applies both.
 
-Phase 1 allows **unauthenticated** invoke for learning — lock down in Phase 2.  
-`LITELLM_API_KEY` is mounted from Secret Manager when using API-key models (not plain `--set-env-vars`). Skip for `vertex_ai/*`.
+Cloud Run stays **publicly invokable** for the SPA; Phase 2 locks chat/session routes with **Firebase Auth** (Bearer ID tokens). Request timeout defaults to `300s` for SSE.
+
+`LITELLM_API_KEY` is mounted from Secret Manager when using API-key models (not plain `--set-env-vars`). Skip for `vertex_ai/*`. Firebase Auth does **not** use `make push-secrets`.
+
+### Firebase Auth (deploy)
+
+1. Enable Identity Toolkit API (Terraform `identitytoolkit.googleapis.com`) / Auth in Firebase Console.
+2. Sign-in methods: Email/Password, Google, GitHub (GitHub OAuth client secret in Firebase Console only).
+3. Set `VITE_FIREBASE_*` in `frontend/.env`, rebuild Hosting (`make deploy-frontend`).
+4. Cloud Run runtime SA + ADC is enough for `firebase-admin` token verify — no Auth secret mount.
+5. History path: `users/{uid}/sessions/{session_id}/messages` (Phase 1 flat `sessions/*` not migrated).
 
 ### LiteLLM
 
@@ -108,7 +117,7 @@ Phase 1 allows **unauthenticated** invoke for learning — lock down in Phase 2.
 - Config in **`frontend/`** (`firebase.json`, gitignored `.firebaserc` from `.firebaserc.example`)
 - Serves `frontend/dist` (`"public": "dist"` when deploying from `frontend/`)
 - SPA rewrite → `/index.html`
-- `VITE_API_BASE_URL` is **build-time** (in `frontend/.env`) — rebuild/redeploy after API URL changes
+- `VITE_API_BASE_URL` and `VITE_FIREBASE_*` are **build-time** (in `frontend/.env`) — rebuild/redeploy after API URL or Auth config changes
 
 ```bash
 # set VITE_API_BASE_URL in frontend/.env (Cloud Run URL from make show-outputs)
@@ -116,6 +125,24 @@ make deploy-frontend   # builds then firebase deploy from frontend/
 ```
 
 Add Hosting origin is automatic from `GCP_PROJECT_ID`. For a custom domain, set `CORS_ALLOWED_ORIGINS` in root `.env` and `make deploy-backend`.
+
+### Custom Domain (Cloudflare + Firebase Hosting)
+
+To use a custom domain like `gcpchatbot.skt27182.com` (purchased on Cloudflare):
+
+1. **Firebase Hosting Setup:**
+   - Go to Firebase Console → **Build** → **Hosting** → **Add custom domain**.
+   - Enter `gcpchatbot.skt27182.com`.
+2. **Cloudflare DNS Records:**
+   - Add `CNAME` record: Name `gcpchatbot`, Target `https://{GCP_PROJECT_ID}.web.app` (or `A` records provided by Firebase).
+   - Set **Proxy Status to DNS Only (Grey Cloud)** while Firebase verifies ownership and issues the SSL cert.
+   - Add `TXT` record if requested by Firebase for domain verification.
+3. **Firebase Auth:**
+   - Go to Firebase Console → **Authentication** → **Settings** → **Authorized domains**.
+   - Add `gcpchatbot.skt27182.com`.
+4. **Backend CORS:**
+   - Add `CORS_ALLOWED_ORIGINS=https://gcpchatbot.skt27182.com` in root `.env`.
+   - Run `make deploy-backend` to apply CORS settings to Cloud Run.
 
 ## Secrets
 

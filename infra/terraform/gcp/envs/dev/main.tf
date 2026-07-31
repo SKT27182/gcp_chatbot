@@ -53,6 +53,7 @@ locals {
     "iam.googleapis.com",
     "firebase.googleapis.com",         # for Firebase CLI linking / Hosting APIs
     "firebasehosting.googleapis.com",
+    "identitytoolkit.googleapis.com",  # Firebase Auth / Identity Platform
   ]
 
   common_labels = {

@@ -1,11 +1,13 @@
-"""API endpoint tests — fake LLM/store injected via monkeypatch (no mock providers in app)."""
+"""API endpoint tests — fake LLM/store + auth override (no mock providers in app)."""
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.auth.deps import get_current_user
+from app.auth.models import AuthUser
 from app.core.config import Settings
 from app.main import create_app
 from app.schema import ChatMessage
@@ -22,17 +24,46 @@ class _FakeLLM:
         last_user = next(m.content for m in reversed(messages) if m.role == "user")
         return f"echo:{last_user} (turns={len(messages)})"
 
+    async def generate_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        system_instruction: str | None = None,
+    ) -> AsyncIterator[str]:
+        text = await self.generate(messages, system_instruction=system_instruction)
+        # Yield a few chunks so SSE parsing is exercised
+        mid = max(1, len(text) // 3)
+        yield text[:mid]
+        yield text[mid:]
+
 
 class _FakeStore:
     def __init__(self) -> None:
-        self._sessions: dict[str, list[ChatMessage]] = {}
-        self._meta: dict[str, dict] = {}
+        # keyed by (user_id or "", session_id)
+        self._sessions: dict[tuple[str, str], list[ChatMessage]] = {}
+        self._meta: dict[tuple[str, str], dict] = {}
 
-    async def get_messages(self, session_id: str, *, limit: int) -> list[ChatMessage]:
-        return self._sessions.get(session_id, [])[-limit:]
+    def _key(self, session_id: str, user_id: str | None) -> tuple[str, str]:
+        return (user_id or "", session_id)
 
-    async def append_messages(self, session_id: str, messages: list[ChatMessage]) -> None:
-        bucket = self._sessions.setdefault(session_id, [])
+    async def get_messages(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+        user_id: str | None = None,
+    ) -> list[ChatMessage]:
+        return self._sessions.get(self._key(session_id, user_id), [])[-limit:]
+
+    async def append_messages(
+        self,
+        session_id: str,
+        messages: list[ChatMessage],
+        *,
+        user_id: str | None = None,
+    ) -> None:
+        key = self._key(session_id, user_id)
+        bucket = self._sessions.setdefault(key, [])
         for message in messages:
             bucket.append(
                 ChatMessage(
@@ -41,7 +72,7 @@ class _FakeStore:
                     created_at=message.created_at or datetime.now(UTC),
                 )
             )
-        meta = self._meta.setdefault(session_id, {})
+        meta = self._meta.setdefault(key, {})
         if "title" not in meta:
             first_user = next((m for m in messages if m.role == "user"), None)
             if first_user:
@@ -50,11 +81,14 @@ class _FakeStore:
             meta["preview"] = messages[-1].content[:80]
         meta["updated_at"] = datetime.now(UTC)
 
-    async def list_sessions(self, *, limit: int = 50):
+    async def list_sessions(self, *, limit: int = 50, user_id: str | None = None):
         from app.schema import SessionSummary
 
+        uid = user_id or ""
         items = []
-        for session_id, meta in self._meta.items():
+        for (owner, session_id), meta in self._meta.items():
+            if owner != uid:
+                continue
             items.append(
                 SessionSummary(
                     session_id=session_id,
@@ -66,12 +100,16 @@ class _FakeStore:
         items.sort(key=lambda s: s.updated_at or datetime.min.replace(tzinfo=UTC), reverse=True)
         return items[:limit]
 
-    async def delete_session(self, session_id: str) -> bool:
-        if session_id not in self._sessions and session_id not in self._meta:
+    async def delete_session(self, session_id: str, *, user_id: str | None = None) -> bool:
+        key = self._key(session_id, user_id)
+        if key not in self._sessions and key not in self._meta:
             return False
-        self._sessions.pop(session_id, None)
-        self._meta.pop(session_id, None)
+        self._sessions.pop(key, None)
+        self._meta.pop(key, None)
         return True
+
+
+TEST_USER = AuthUser(uid="test-user-1", email="test@example.com", name="Test User")
 
 
 @pytest.fixture
@@ -87,10 +125,13 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         litellm_model="gemini/gemini-2.0-flash",
         litellm_api_key="test-key-not-used",
         gcp_project_id="test-project",
+        auth_disabled=True,
     )
     app = create_app(settings)
+    app.dependency_overrides[get_current_user] = lambda: TEST_USER
     with TestClient(app) as test_client:
         yield test_client
+    app.dependency_overrides.clear()
 
 
 def test_health(client: TestClient) -> None:
@@ -99,6 +140,24 @@ def test_health(client: TestClient) -> None:
     body = response.json()
     assert body["status"] == "ok"
     assert body["app"] == "test-api"
+
+
+def test_chat_requires_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.main.create_llm_client", lambda _settings: _FakeLLM())
+    monkeypatch.setattr("app.main.create_chat_store", lambda _settings: _FakeStore())
+    settings = Settings(
+        app_name="test-api",
+        environment="test",
+        log_level="WARNING",
+        litellm_model="gemini/gemini-2.0-flash",
+        litellm_api_key="test-key",
+        gcp_project_id="test-project",
+        auth_disabled=True,
+    )
+    app = create_app(settings)
+    with TestClient(app) as test_client:
+        response = test_client.post("/chat", json={"message": "Hello"})
+        assert response.status_code == 401
 
 
 def test_chat_creates_session_and_follow_up(client: TestClient) -> None:
@@ -146,3 +205,19 @@ def test_chat_creates_session_and_follow_up(client: TestClient) -> None:
     assert deleted.status_code == 204
     assert client.get("/sessions").json()["sessions"] == []
     assert client.delete(f"/sessions/{session_id}").status_code == 404
+
+
+def test_chat_stream_sse(client: TestClient) -> None:
+    with client.stream("POST", "/chat/stream", json={"message": "Stream me"}) as response:
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
+        body = "".join(response.iter_text())
+
+    assert '"type": "session"' in body or '"type":"session"' in body
+    assert '"type": "token"' in body or '"type":"token"' in body
+    assert '"type": "done"' in body or '"type":"done"' in body
+    assert "echo:" in body
+
+    listed = client.get("/sessions")
+    assert listed.status_code == 200
+    assert len(listed.json()["sessions"]) >= 1

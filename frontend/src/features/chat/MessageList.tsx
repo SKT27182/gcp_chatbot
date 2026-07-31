@@ -229,7 +229,7 @@ export function MessageList({ messages, isPending, onSelectPrompt }: MessageList
           )}
         </div>
       ))}
-      {isPending ? (
+      {isPending && !(messages.at(-1)?.role === "assistant") ? (
         <div className="mr-auto flex max-w-[90%] items-center gap-2 rounded-2xl border border-border/50 bg-assistant/60 px-4.5 py-3 text-sm text-muted-foreground">
           <span className="inline-flex gap-1">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pink-400" />
@@ -237,6 +237,15 @@ export function MessageList({ messages, isPending, onSelectPrompt }: MessageList
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pink-400 [animation-delay:300ms]" />
           </span>
           Thinking…
+        </div>
+      ) : null}
+      {isPending && messages.at(-1)?.role === "assistant" && !messages.at(-1)?.content ? (
+        <div className="mr-auto -mt-3 ml-4 text-xs text-muted-foreground">
+          <span className="inline-flex gap-1">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pink-400" />
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pink-400 [animation-delay:150ms]" />
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pink-400 [animation-delay:300ms]" />
+          </span>
         </div>
       ) : null}
     </div>

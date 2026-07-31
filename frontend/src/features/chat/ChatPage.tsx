@@ -1,13 +1,19 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ArrowUp, Loader2 } from "lucide-react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { ArrowUp, Loader2, Square } from "lucide-react"
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { ChatSidebar } from "@/features/chat/ChatSidebar"
 import { MessageList } from "@/features/chat/MessageList"
-import { deleteSession, getHealth, getSession, listSessions, postChat } from "@/lib/api"
+import { deleteSession, getHealth, getSession, listSessions, streamChat } from "@/lib/api"
+import { useAuthStore } from "@/stores/authStore"
 import { buildLocalSessionSummary, titleFromMessage, useChatStore } from "@/stores/chatStore"
+
+import { LandingPage } from "@/features/auth/LandingPage"
+import { EmailVerificationPage } from "@/features/auth/EmailVerificationPage"
 
 export function ChatPage() {
   const queryClient = useQueryClient()
+  const user = useAuthStore((s) => s.user)
+  const authLoading = useAuthStore((s) => s.loading)
   const {
     sessionId,
     messages,
@@ -17,6 +23,7 @@ export function ChatPage() {
     setDraft,
     setSessionId,
     addMessage,
+    appendToLastAssistant,
     setSessions,
     upsertSession,
     removeSession,
@@ -27,9 +34,12 @@ export function ChatPage() {
   } = useChatStore()
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [streamError, setStreamError] = useState<string | null>(null)
+  const [isStreaming, setIsStreaming] = useState(false)
 
   const healthQuery = useQuery({
     queryKey: ["health"],
@@ -43,10 +53,11 @@ export function ChatPage() {
   }, [healthQuery.data])
 
   const sessionsQuery = useQuery({
-    queryKey: ["sessions"],
+    queryKey: ["sessions", user?.uid ?? "anon"],
     queryFn: listSessions,
     staleTime: 15_000,
     retry: 1,
+    enabled: Boolean(user),
   })
 
   useEffect(() => {
@@ -55,44 +66,89 @@ export function ChatPage() {
     }
   }, [sessionsQuery.data, setSessions])
 
-  const mutation = useMutation({
-    mutationFn: async (message: string) => postChat(message, sessionId),
-    onSuccess: (data, message) => {
-      addMessage({ role: "user", content: message })
-      addMessage({ role: "assistant", content: data.reply })
-      setSessionId(data.session_id)
-      setDraft("")
-      upsertSession(buildLocalSessionSummary(data.session_id, message, data.reply))
-      void queryClient.invalidateQueries({ queryKey: ["sessions"] })
-    },
-  })
+  useEffect(() => {
+    if (!user) {
+      resetConversation()
+      setSessions([])
+    }
+  }, [user, resetConversation, setSessions])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages, mutation.isPending])
+  }, [messages, isStreaming])
 
-  function handleSubmit(event?: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event?: FormEvent<HTMLFormElement>) {
     if (event) event.preventDefault()
     const message = draft.trim()
-    if (!message || mutation.isPending) return
-    mutation.mutate(message)
+    if (!message || isStreaming || !user) return
+
+    setStreamError(null)
+    setLoadError(null)
+    setDraft("")
+    addMessage({ role: "user", content: message })
+    addMessage({ role: "assistant", content: "" })
+    setIsStreaming(true)
+
+    const controller = new AbortController()
+    abortRef.current = controller
+    let activeSessionId = sessionId
+    let assistantText = ""
+
+    try {
+      await streamChat(message, sessionId, {
+        signal: controller.signal,
+        onSession: (id) => {
+          activeSessionId = id
+          setSessionId(id)
+        },
+        onToken: (chunk) => {
+          assistantText += chunk
+          appendToLastAssistant(chunk)
+        },
+        onDone: (id) => {
+          activeSessionId = id
+          setSessionId(id)
+          upsertSession(buildLocalSessionSummary(id, message, assistantText || "…"))
+          void queryClient.invalidateQueries({ queryKey: ["sessions"] })
+        },
+        onError: (detail) => {
+          setStreamError(detail)
+        },
+      })
+    } catch (error) {
+      if ((error as Error).name !== "AbortError") {
+        setStreamError((error as Error).message || "Failed to send message")
+      }
+    } finally {
+      setIsStreaming(false)
+      abortRef.current = null
+      if (activeSessionId) {
+        upsertSession(
+          buildLocalSessionSummary(activeSessionId, message, assistantText || "…"),
+        )
+      }
+    }
+  }
+
+  function handleStop() {
+    abortRef.current?.abort()
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault()
-      handleSubmit()
+      void handleSubmit()
     }
   }
 
   function handlePromptSelect(promptText: string) {
-    if (mutation.isPending) return
+    if (isStreaming || !user) return
     setDraft(promptText)
     textareaRef.current?.focus()
   }
 
   async function handleSelectSession(id: string) {
-    if (id === sessionId || loadingSessionId) return
+    if (!user || id === sessionId || loadingSessionId) return
     setLoadError(null)
     setLoadingSessionId(id)
     try {
@@ -105,7 +161,6 @@ export function ChatPage() {
       if (firstUser) {
         patchSession(history.session_id, { title: titleFromMessage(firstUser.content) })
       }
-      mutation.reset()
       if (window.matchMedia("(max-width: 767px)").matches) {
         setSidebarOpen(false)
       }
@@ -117,8 +172,9 @@ export function ChatPage() {
   }
 
   function handleNewChat() {
+    abortRef.current?.abort()
     resetConversation()
-    mutation.reset()
+    setStreamError(null)
     setLoadError(null)
     if (window.matchMedia("(max-width: 767px)").matches) {
       setSidebarOpen(false)
@@ -136,9 +192,6 @@ export function ChatPage() {
     try {
       await deleteSession(id)
       removeSession(id)
-      if (sessionId === id) {
-        mutation.reset()
-      }
       void queryClient.invalidateQueries({ queryKey: ["sessions"] })
     } catch (error) {
       setLoadError((error as Error).message || "Failed to delete chat")
@@ -147,7 +200,24 @@ export function ChatPage() {
     }
   }
 
-  const displaySessions = sessionsQuery.data ?? sessions
+  if (authLoading) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background text-foreground">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <LandingPage />
+  }
+
+  if (!user.emailVerified && user.providerData.some((p) => p.providerId === "password")) {
+    return <EmailVerificationPage />
+  }
+
+  const displaySessions = user ? (sessionsQuery.data ?? sessions) : []
+  const inputDisabled = isStreaming || Boolean(loadingSessionId) || !user || authLoading
 
   return (
     <div className="flex h-full min-h-0 bg-background text-foreground">
@@ -164,32 +234,31 @@ export function ChatPage() {
       />
 
       <div className="relative flex min-w-0 flex-1 flex-col h-full overflow-hidden">
-
-
-        {/* Chat Messages */}
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <MessageList
             messages={messages}
-            isPending={mutation.isPending}
+            isPending={isStreaming}
             onSelectPrompt={handlePromptSelect}
           />
           <div ref={bottomRef} />
         </main>
 
-        {/* Floating Input Area */}
         <footer className="w-full shrink-0 pb-4 pt-2 px-3 sm:px-4">
           <div className="mx-auto max-w-3xl">
-            {mutation.isError ? (
-              <p className="mb-2 text-center text-xs text-destructive">
-                {(mutation.error as Error).message || "Failed to send message"}
+            {!user && !authLoading ? (
+              <p className="mb-2 text-center text-xs text-muted-foreground">
+                Sign in from the sidebar to chat and save history.
               </p>
+            ) : null}
+            {streamError ? (
+              <p className="mb-2 text-center text-xs text-destructive">{streamError}</p>
             ) : null}
             {loadError ? (
               <p className="mb-2 text-center text-xs text-destructive">{loadError}</p>
             ) : null}
 
             <form
-              onSubmit={handleSubmit}
+              onSubmit={(e) => void handleSubmit(e)}
               className="relative flex flex-col rounded-2xl border border-border/80 bg-card p-3 shadow-lg transition-all focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/40"
             >
               <textarea
@@ -197,9 +266,9 @@ export function ChatPage() {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Type your message here..."
+                placeholder={user ? "Type your message here..." : "Sign in to start chatting..."}
                 rows={1}
-                disabled={mutation.isPending || Boolean(loadingSessionId)}
+                disabled={inputDisabled}
                 className="w-full resize-none border-0 bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-0 min-h-[44px] max-h-[160px]"
               />
 
@@ -211,18 +280,29 @@ export function ChatPage() {
                   </div>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={mutation.isPending || !draft.trim() || Boolean(loadingSessionId)}
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all hover:bg-primary/90 disabled:opacity-30 disabled:hover:bg-primary"
-                  title="Send message"
-                >
-                  {mutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <ArrowUp className="h-4 w-4 stroke-[2.5]" />
-                  )}
-                </button>
+                {isStreaming ? (
+                  <button
+                    type="button"
+                    onClick={handleStop}
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-sm transition-all hover:bg-destructive/90"
+                    title="Stop generating"
+                  >
+                    <Square className="h-3.5 w-3.5 fill-current" />
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={inputDisabled || !draft.trim()}
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all hover:bg-primary/90 disabled:opacity-30 disabled:hover:bg-primary"
+                    title="Send message"
+                  >
+                    {authLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <ArrowUp className="h-4 w-4 stroke-[2.5]" />
+                    )}
+                  </button>
+                )}
               </div>
             </form>
           </div>
@@ -231,4 +311,3 @@ export function ChatPage() {
     </div>
   )
 }
-

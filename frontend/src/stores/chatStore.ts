@@ -12,6 +12,7 @@ type ChatState = {
   setSessionId: (sessionId: string | null) => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
+  appendToLastAssistant: (chunk: string) => void
   setSessions: (sessions: SessionSummary[]) => void
   upsertSession: (session: SessionSummary) => void
   removeSession: (sessionId: string) => void
@@ -42,6 +43,20 @@ export const useChatStore = create<ChatState>()(
         set((state) => ({
           messages: [...state.messages, message],
         })),
+      appendToLastAssistant: (chunk) =>
+        set((state) => {
+          const messages = [...state.messages]
+          const last = messages[messages.length - 1]
+          if (!last || last.role !== "assistant") {
+            messages.push({ role: "assistant", content: chunk })
+          } else {
+            messages[messages.length - 1] = {
+              ...last,
+              content: last.content + chunk,
+            }
+          }
+          return { messages }
+        }),
       setSessions: (sessions) => set({ sessions }),
       upsertSession: (session) =>
         set((state) => {

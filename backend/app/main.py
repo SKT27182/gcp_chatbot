@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import chat, health
+from app.auth.firebase import init_firebase_admin
 from app.core.config import Settings, get_settings
 from app.providers.llm.factory import create_llm_client
 from app.providers.store.factory import create_chat_store
@@ -22,15 +23,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     setup_logging(settings)
     logger = get_logger(__name__)
 
+    if not settings.auth_disabled:
+        init_firebase_admin(settings)
+
     llm = create_llm_client(settings)
     store = create_chat_store(settings)
     app.state.chat_service = ChatService(llm=llm, store=store, settings=settings)
 
     logger.info(
-        "App started name=%s env=%s model=%s cors=%s",
+        "App started name=%s env=%s model=%s auth_disabled=%s cors=%s",
         settings.app_name,
         settings.environment,
         settings.litellm_model,
+        settings.auth_disabled,
         settings.cors_origin_list,
     )
     yield

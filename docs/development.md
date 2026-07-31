@@ -16,11 +16,21 @@
 | `CORS_ALLOWED_ORIGINS` | Root `.env` (optional) | Extra origins only; localhost + `*.web.app` are automatic |
 | `LITELLM_API_KEY` / `LITELLM_BASE_URL` | Root `.env` | API-key models + `make push-secrets` (not Vertex) |
 | `FIRESTORE_DATABASE` | Root `.env` | Local + optional Cloud Run override |
+| `FIREBASE_PROJECT_ID` | Root `.env` (optional) | When Firebase project id ≠ `GCP_PROJECT_ID` |
+| `VITE_FIREBASE_*` | `frontend/.env` | Firebase Auth web config (build-time) |
 | Infra (`project_id`, `region`, `environment`) | `terraform.tfvars` | Terraform only |
-| Firestore local auth | `gcloud auth application-default login` | No JSON file needed |
+| Firestore + Firebase Admin local auth | `gcloud auth application-default login` | No JSON file needed |
 | Firestore on Cloud Run | Terraform runtime SA | Automatic |
 
 Get an API key: [Google AI Studio](https://aistudio.google.com/apikey).
+
+## Firebase Auth (local)
+
+1. Firebase Console → Authentication → enable **Email/Password**, **Google**, **GitHub**.
+2. Add a Web app; copy config into `frontend/.env` (`VITE_FIREBASE_API_KEY`, `AUTH_DOMAIN`, `PROJECT_ID`, `APP_ID`).
+3. Authorized domains: `localhost` and your Hosting domain.
+4. Backend: same ADC as Firestore (`gcloud auth application-default login`) so `firebase-admin` can verify ID tokens.
+5. Smoke: sign in → send a message → confirm SSE tokens and a session under `users/{uid}/sessions/` in Firestore.
 
 ## Make
 

@@ -3,47 +3,160 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --color-background: #f8f5fa;
-  --color-foreground: #1c1625;
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
   --color-card: #ffffff;
-  --color-card-foreground: #1c1625;
-  --color-primary: #78295e;
+  --color-card-foreground: #0f172a;
+  --color-primary: #0284c7;
   --color-primary-foreground: #ffffff;
-  --color-muted: #f0eaf5;
-  --color-muted-foreground: #6e6082;
-  --color-border: #e3d9ea;
-  --color-input: #e3d9ea;
-  --color-ring: #78295e;
+  --color-muted: #f1f5f9;
+  --color-muted-foreground: #475569;
+  --color-border: #e2e8f0;
+  --color-input: #e2e8f0;
+  --color-ring: #0284c7;
   --color-destructive: #e11d48;
-  --color-assistant: #f5f0fa;
-  --color-user: #eddff3;
-  --color-sidebar: #f3edf7;
-  --color-sidebar-foreground: #1c1625;
-  --color-sidebar-border: #e3d9ea;
-  --color-sidebar-accent: #eddff3;
-  --color-accent-glow: #a84888;
+  --color-assistant: #f8fafc;
+  --color-user: #e0f2fe;
+  --color-sidebar: #f8fafc;
+  --color-sidebar-foreground: #0f172a;
+  --color-sidebar-border: #e2e8f0;
+  --color-sidebar-accent: #e0f2fe;
+  --color-accent-glow: #38bdf8;
 }
 
 :root.dark, html.dark, .dark {
-  --color-background: #141018;
-  --color-foreground: #ece6f2;
-  --color-card: #1c1724;
-  --color-card-foreground: #ece6f2;
-  --color-primary: #5c2049;
+  --color-background: #121212;
+  --color-foreground: #ffffff;
+  --color-card: #181818;
+  --color-card-foreground: #ffffff;
+  --color-primary: #38bdf8;
   --color-primary-foreground: #ffffff;
-  --color-muted: #241c2e;
-  --color-muted-foreground: #9486a8;
-  --color-border: #2c2238;
-  --color-input: #2c2238;
-  --color-ring: #7d2c64;
+  --color-muted: #242424;
+  --color-muted-foreground: #e2e8f0;
+  --color-border: #2d2d2d;
+  --color-input: #2d2d2d;
+  --color-ring: #38bdf8;
   --color-destructive: #f43f5e;
-  --color-assistant: #1b1623;
+  --color-assistant: #181818;
+  --color-user: #1e293b;
+  --color-sidebar: #121212;
+  --color-sidebar-foreground: #ffffff;
+  --color-sidebar-border: #242424;
+  --color-sidebar-accent: #1e293b;
+  --color-accent-glow: #0284c7;
+}
+
+/* Pre-defined Color Schemes */
+/* 1. Plum (Default) */
+[data-color-scheme="plum"] {
+  --color-primary: #78295e;
+  --color-ring: #78295e;
+  --color-user: #eddff3;
+  --color-sidebar-accent: #eddff3;
+  --color-accent-glow: #a84888;
+}
+.dark[data-color-scheme="plum"], html.dark[data-color-scheme="plum"] {
+  --color-primary: #8a306c;
+  --color-ring: #8a306c;
   --color-user: #2d213b;
-  --color-sidebar: #17121d;
-  --color-sidebar-foreground: #ece6f2;
-  --color-sidebar-border: #261e31;
   --color-sidebar-accent: #261d32;
   --color-accent-glow: #641e4e;
+}
+
+/* 2. Emerald */
+[data-color-scheme="emerald"] {
+  --color-primary: #059669;
+  --color-ring: #059669;
+  --color-user: #d1fae5;
+  --color-sidebar-accent: #d1fae5;
+  --color-accent-glow: #10b981;
+}
+.dark[data-color-scheme="emerald"], html.dark[data-color-scheme="emerald"] {
+  --color-primary: #10b981;
+  --color-ring: #10b981;
+  --color-user: #064e3b;
+  --color-sidebar-accent: #064e3b;
+  --color-accent-glow: #047857;
+}
+
+/* 3. Sapphire */
+[data-color-scheme="sapphire"] {
+  --color-primary: #2563eb;
+  --color-ring: #2563eb;
+  --color-user: #dbeafe;
+  --color-sidebar-accent: #dbeafe;
+  --color-accent-glow: #3b82f6;
+}
+.dark[data-color-scheme="sapphire"], html.dark[data-color-scheme="sapphire"] {
+  --color-primary: #3b82f6;
+  --color-ring: #3b82f6;
+  --color-user: #1e3a8a;
+  --color-sidebar-accent: #1e3a8a;
+  --color-accent-glow: #1d4ed8;
+}
+
+/* 4. Violet */
+[data-color-scheme="violet"] {
+  --color-primary: #7c3aed;
+  --color-ring: #7c3aed;
+  --color-user: #ede9fe;
+  --color-sidebar-accent: #ede9fe;
+  --color-accent-glow: #8b5cf6;
+}
+.dark[data-color-scheme="violet"], html.dark[data-color-scheme="violet"] {
+  --color-primary: #8b5cf6;
+  --color-ring: #8b5cf6;
+  --color-user: #4c1d95;
+  --color-sidebar-accent: #4c1d95;
+  --color-accent-glow: #6d28d9;
+}
+
+/* 5. Rose */
+[data-color-scheme="rose"] {
+  --color-primary: #e11d48;
+  --color-ring: #e11d48;
+  --color-user: #ffe4e6;
+  --color-sidebar-accent: #ffe4e6;
+  --color-accent-glow: #f43f5e;
+}
+.dark[data-color-scheme="rose"], html.dark[data-color-scheme="rose"] {
+  --color-primary: #f43f5e;
+  --color-ring: #f43f5e;
+  --color-user: #881337;
+  --color-sidebar-accent: #881337;
+  --color-accent-glow: #be123c;
+}
+
+/* 6. Amber */
+[data-color-scheme="amber"] {
+  --color-primary: #d97706;
+  --color-ring: #d97706;
+  --color-user: #fef3c7;
+  --color-sidebar-accent: #fef3c7;
+  --color-accent-glow: #f59e0b;
+}
+.dark[data-color-scheme="amber"], html.dark[data-color-scheme="amber"] {
+  --color-primary: #f59e0b;
+  --color-ring: #f59e0b;
+  --color-user: #78350f;
+  --color-sidebar-accent: #78350f;
+  --color-accent-glow: #b45309;
+}
+
+/* 7. Cyan */
+[data-color-scheme="cyan"] {
+  --color-primary: #0891b2;
+  --color-ring: #0891b2;
+  --color-user: #cffaff;
+  --color-sidebar-accent: #cffaff;
+  --color-accent-glow: #06b6d4;
+}
+.dark[data-color-scheme="cyan"], html.dark[data-color-scheme="cyan"] {
+  --color-primary: #06b6d4;
+  --color-ring: #06b6d4;
+  --color-user: #164e63;
+  --color-sidebar-accent: #164e63;
+  --color-accent-glow: #0e7490;
 }
 
 @theme inline {

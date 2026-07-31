@@ -62,6 +62,12 @@ variable "max_instances" {
   default = 3
 }
 
+variable "timeout" {
+  description = "Request timeout for long SSE streams"
+  type        = string
+  default     = "300s"
+}
+
 variable "cpu" {
   type    = string
   default = "1"
@@ -88,6 +94,7 @@ resource "google_cloud_run_v2_service" "api" {
     # THIS is what ties Cloud Run → Firestore/Vertex: run as the IAM module's SA
     service_account = var.service_account_email
     labels          = var.labels
+    timeout         = var.timeout
 
     scaling {
       min_instance_count = var.min_instances

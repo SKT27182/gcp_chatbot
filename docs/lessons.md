@@ -128,3 +128,15 @@ Filter infra by Billing labels `app=chatbot` / `env=dev` (Terraform). Token attr
 - **Cause:** Unquoted `FIRESTORE_DATABASE=(default)` in `.env` is a bash array when sourced; deploy passed `default` and overwrote Terraform’s `(default)`.
 - **Fix:** Quote as `FIRESTORE_DATABASE="(default)"`; stop injecting it via `additional_env_vars`; normalize `default` → `(default)` in Settings.
 - **Avoid next time:** Never unquote parentheses in `.env` values that scripts `source`.
+
+### 2026-07-30 — vite build Abort trap 134 (Homebrew Node + ada-url)
+- **Symptom:** `make deploy-frontend` / `pnpm build` fails with `pointer being freed was not allocated` / `Abort trap: 6` / exit 134 during `vite build`.
+- **Cause:** Homebrew `node` linked against `libada.3.dylib` while `ada-url` only shipped `libada.4`; a forced `libada.3 → libada.4` symlink was ABI-incompatible and crashed malloc.
+- **Fix:** Remove the bad symlink; `brew reinstall node` (bottle `26.5.0_1` links `libada.4.dylib`).
+- **Avoid next time:** Don’t symlink major dylib versions to “fix” Node; reinstall/upgrade the formula that owns the ABI.
+
+### 2026-07-30 — Custom Domain (Cloudflare + Firebase Hosting) SSL verification
+- **Symptom:** Firebase Hosting custom domain SSL provisioning stuck in "Pending" or failing.
+- **Cause:** Cloudflare DNS proxy status set to Orange Cloud (Proxied) before ACME verification completed.
+- **Fix:** Keep Cloudflare DNS Proxy status set to **DNS Only (Grey Cloud)** during domain verification and Let's Encrypt / GTS certificate issuance. Enable CORS (`CORS_ALLOWED_ORIGINS=https://gcpchatbot.skt27182.com`) and add domain to Firebase Auth Authorized Domains.
+- **Avoid next time:** Always use Grey Cloud during Firebase Hosting SSL provisioning.

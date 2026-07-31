@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     gcp_project_id: str = ""
     # Optional override when Firebase project id differs from GCP project id
     firebase_project_id: str = ""
+    # When True, skip Firebase Admin init (tests override get_current_user)
+    auth_disabled: bool = False
+
     gcp_region: str = "asia-south1"
     # Vertex generateContent location — gemini-3.5-flash-lite requires "global"
     gcp_location: str = "global"

@@ -84,17 +84,7 @@ class LiteLLMClient:
         *,
         system_instruction: str | None = None,
     ) -> str:
-        payload: list[dict[str, str]] = [
-            {"role": "system", "content": system_instruction or DEFAULT_SYSTEM}
-        ]
-        for message in messages:
-            if message.role == "system":
-                continue
-            role = "assistant" if message.role == "assistant" else "user"
-            payload.append({"role": role, "content": message.content})
-
-        if not any(item["role"] == "user" for item in payload):
-            raise ValueError("Cannot generate a reply with an empty message list")
+        payload = self._build_payload(messages, system_instruction=system_instruction)
 
         kwargs: dict[str, Any] = {
             "model": self._model,
@@ -109,3 +99,48 @@ class LiteLLMClient:
         if not text:
             raise RuntimeError("LiteLLM returned an empty response")
         return text.strip()
+
+    async def generate_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        system_instruction: str | None = None,
+    ):
+        payload = self._build_payload(messages, system_instruction=system_instruction)
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": payload,
+            "stream": True,
+            **self._extra,
+        }
+        if self._billing_labels:
+            kwargs["labels"] = self._billing_labels
+
+        stream = await acompletion(**kwargs)
+        async for chunk in stream:
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            content = getattr(delta, "content", None) if delta is not None else None
+            if content:
+                yield content
+
+    def _build_payload(
+        self,
+        messages: list[ChatMessage],
+        *,
+        system_instruction: str | None = None,
+    ) -> list[dict[str, str]]:
+        payload: list[dict[str, str]] = [
+            {"role": "system", "content": system_instruction or DEFAULT_SYSTEM}
+        ]
+        for message in messages:
+            if message.role == "system":
+                continue
+            role = "assistant" if message.role == "assistant" else "user"
+            payload.append({"role": role, "content": message.content})
+
+        if not any(item["role"] == "user" for item in payload):
+            raise ValueError("Cannot generate a reply with an empty message list")
+        return payload

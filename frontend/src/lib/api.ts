@@ -3,6 +3,8 @@ import { useAuthStore } from "@/stores/authStore"
 export type ChatMessage = {
   role: "user" | "assistant"
   content: string
+  /** Client-only; never written to Firestore. */
+  status?: "streaming" | "done" | "error" | "cancelled"
 }
 
 export type ChatResponse = {
@@ -28,6 +30,18 @@ export type StreamChatHandlers = {
   onDone?: (sessionId: string) => void
   onError?: (detail: string) => void
   signal?: AbortSignal
+}
+
+export type ModelInfo = {
+  id: string
+  family: string
+  label: string
+  location: string
+}
+
+export type ModelListResponse = {
+  models: ModelInfo[]
+  default: string
 }
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(
@@ -62,13 +76,18 @@ async function parseError(response: Response): Promise<string> {
   return detail || `Request failed (${response.status})`
 }
 
-export async function postChat(message: string, sessionId: string | null): Promise<ChatResponse> {
+export async function postChat(
+  message: string,
+  sessionId: string | null,
+  model?: string | null,
+): Promise<ChatResponse> {
   const response = await fetch(`${getApiBaseUrl()}/chat`, {
     method: "POST",
     headers: await authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       message,
       session_id: sessionId,
+      ...(model ? { model } : {}),
     }),
   })
 
@@ -83,6 +102,7 @@ export async function streamChat(
   message: string,
   sessionId: string | null,
   handlers: StreamChatHandlers,
+  model?: string | null,
 ): Promise<void> {
   const response = await fetch(`${getApiBaseUrl()}/chat/stream`, {
     method: "POST",
@@ -90,6 +110,7 @@ export async function streamChat(
     body: JSON.stringify({
       message,
       session_id: sessionId,
+      ...(model ? { model } : {}),
     }),
     signal: handlers.signal,
   })
@@ -186,4 +207,12 @@ export async function getHealth(): Promise<HealthResponse> {
     throw new Error(`Health check failed (${response.status})`)
   }
   return response.json() as Promise<HealthResponse>
+}
+
+export async function listModels(): Promise<ModelListResponse> {
+  const response = await fetch(`${getApiBaseUrl()}/models`)
+  if (!response.ok) {
+    throw new Error(`Failed to load models (${response.status})`)
+  }
+  return response.json() as Promise<ModelListResponse>
 }

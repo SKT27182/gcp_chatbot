@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 
 from app.auth.deps import get_current_user
 from app.auth.models import AuthUser
+from app.providers.llm.models import UnknownChatModelError, resolve_chat_model
 from app.schema import ChatRequest, ChatResponse, SessionHistoryResponse, SessionListResponse
 from app.utils.logger import get_logger
 
@@ -24,6 +25,8 @@ async def chat(
     service = request.app.state.chat_service
     try:
         return await service.chat(payload, user_id=user.uid)
+    except UnknownChatModelError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("Chat request failed")
         raise HTTPException(status_code=500, detail="Failed to generate chat reply") from exc
@@ -36,6 +39,14 @@ async def chat_stream(
     user: AuthUser = Depends(get_current_user),
 ) -> StreamingResponse:
     service = request.app.state.chat_service
+    try:
+        # Fail closed before SSE so unknown models are HTTP 400, not a 200 error event.
+        resolve_chat_model(
+            payload.model,
+            default_model=request.app.state.settings.litellm_model,
+        )
+    except UnknownChatModelError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     async def event_generator():
         async for chunk in service.chat_stream(payload, user_id=user.uid):

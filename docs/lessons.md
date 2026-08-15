@@ -81,7 +81,7 @@ Filter infra by Billing labels `app=chatbot` / `env=dev` (Terraform). Token attr
 - **Symptom:** `Container manifest type 'application/vnd.oci.image.index.v1+json' must support amd64/linux`
 - **Cause:** (1) arm64 default on Apple Silicon; (2) BuildKit provenance/SBOM turns the push into an OCI index Cloud Run mishandles.
 - **Fix:** `docker buildx build --platform linux/amd64 --provenance=false --sbom=false --push`, tag `…-amd64`.
-- **Avoid next time:** Never push default Mac/OrbStack builds to Cloud Run as-is.
+- **Avoid next time:** Never push default Mac/OrbStack builds to Cloud Run as-is. Local deploy uses `docker buildx --platform linux/amd64 --provenance=false --sbom=false`. Use `make deploy-backend BUILD=gcp` when you want linux/amd64 built in GCP.
 
 ### 2026-07-28 — Cloud Run traffic type enum rejected
 - **Symptom:** `terraform apply` failed: `expected traffic.0.type to be one of ["TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST" "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION" ""], got TRAFFIC_TARGET_ALLOCATION_TYPE_PERCENT`
@@ -140,3 +140,39 @@ Filter infra by Billing labels `app=chatbot` / `env=dev` (Terraform). Token attr
 - **Cause:** Cloudflare DNS proxy status set to Orange Cloud (Proxied) before ACME verification completed.
 - **Fix:** Keep Cloudflare DNS Proxy status set to **DNS Only (Grey Cloud)** during domain verification and Let's Encrypt / GTS certificate issuance. Enable CORS (`CORS_ALLOWED_ORIGINS=https://gcpchatbot.skt27182.com`) and add domain to Firebase Auth Authorized Domains.
 - **Avoid next time:** Always use Grey Cloud during Firebase Hosting SSL provisioning.
+
+### 2026-08-15 — Cloud Run kept serving old image after deploy-backend
+- **Symptom:** Frontend picker showed “Couldn't load models”; `GET /models` was `{"detail":"Not Found"}` while `/health` was 200. OpenAPI listed only the old routes.
+- **Cause:** Image tag is `{gitsha}-amd64`. Uncommitted picker code was built and pushed to the **same** tag; Terraform saw no `cloud_run_image` change, so Cloud Run never created a new revision.
+- **Fix:** `scripts/deploy_backend.sh` resolves the Artifact Registry digest after push and passes `image@sha256:…` to Terraform so every rebuild rolls API + worker.
+- **Avoid next time:** Don’t assume overwriting a git-SHA tag updates Cloud Run; pin the digest (or change the tag) on every deploy.
+
+### 2026-08-15 — Partner Vertex models: No module named 'vertexai'
+- **Symptom:** Picker Gemini worked; Claude/Gemma/GPT-OSS/Grok/Qwen failed with `vertexai import failed … No module named 'vertexai'`.
+- **Cause:** LiteLLM’s Gemini `vertex_ai/` path uses HTTP; partner/Model Garden models import the Vertex SDK (`vertexai` from `google-cloud-aiplatform`). The image only had Firestore/Pub/Sub Google clients.
+- **Fix:** `uv add 'google-cloud-aiplatform>=1.38'` in `backend/` and redeploy the API image.
+- **Avoid next time:** Treat `google-cloud-aiplatform` as required for any non-Gemini Vertex catalog model, not optional.
+
+### 2026-08-15 — Dropped Claude/Grok from the picker
+- **Symptom:** After partner SDK + region pins, Claude 404’d on `us-east5` (and previously 429’d on global quota). Grok 4.3 404’d on `us-central1`; Grok 4.6/4.20 429’d. GPT-OSS / Qwen / Gemma worked.
+- **Cause:** Claude/Grok need Model Garden Enable + partner terms (not Terraform-completable) and often start with **zero quota**. Regional 404 means the project is not entitled in that location even if global Enable succeeded.
+- **Fix:** Remove Claude and Grok from `VERTEX_MODELS`. Expand Gemini (`gemini-3.7-flash`, `gemini-3.6-flash`) and add open MaaS that shares working regions: Mistral / Codestral (`us-central1`), Llama 3.3 70B (`us-central1`), DeepSeek V3.2 (`global`).
+- **Avoid next time:** Don’t put Claude/Grok (or other unpaid partner cards) in the picker until Enable + a successful predict are confirmed on this project.
+
+### 2026-08-15 — Dropped Mistral from the picker
+- **Symptom:** Mistral Medium 3, Small 3.1, and Codestral 2 were still in `GET /models` after Claude/Grok were removed.
+- **Cause:** Same class as other unpaid partner cards: Model Garden Enable + quota are not guaranteed on this project.
+- **Fix:** Remove the three Mistral/Codestral ids from `VERTEX_MODELS`. Keep GPT-OSS / Llama / DeepSeek / Qwen / Gemma.
+- **Avoid next time:** Don’t catalogue Mistral until Enable + a successful predict are confirmed here.
+
+### 2026-08-15 — Grok 404/400 on us-central1; Claude 429 on global quota
+- **Symptom:** After partner SDK was installed, Qwen/Gemma/GPT-OSS worked. Grok 4.20 returned `only available via global endpoint` from `us-central1`. Grok 4.3 404’d `publishers/xai/models/grok-4.3` in `us-central1`. Grok 4.6 and Claude Haiku returned `429 RESOURCE_EXHAUSTED` (`global_online_prediction_requests_per_base_model` for Claude).
+- **Cause:** Grok MaaS is **global-endpoint only**. The catalog had Grok 4.20 on `us-central1`, and LiteLLM’s Model Garden handler uses `vertex_location or "us-central1"` so a dropped/missing location still hits Iowa. Claude was correctly on `global`; that 429 is Vertex’s **global Claude quota** (often 0 until a quota increase), not a bad model id.
+- **Fix:** Catalog all Grok ids as `global` and pin LiteLLM `api_base` to `https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/endpoints/openapi`. Route Claude to `us-east5` so it uses the regional quota metric. Enable each partner model in Model Garden; if 429 persists, request quota for that base model.
+- **Avoid next time:** Don’t copy GPT-OSS’s `us-central1` onto Grok. Don’t treat a named `…_per_base_model` 429 as a routing bug until the URL location matches the model card. (Superseded the same day: Claude/Grok were removed from the picker — see the entry above.)
+
+### 2026-08-15 — Worker Cloud Run failed to start on first tf-apply (uvicorn not in PATH)
+- **Symptom:** `make tf-apply` failed on `module.cloud_run_worker`: container did not listen on `PORT=8080`. Logs: `error finding executable "uvicorn" in PATH [/usr/local/sbin … /bin]` on revision `gcp-chatbot-worker-00006-*`; container name `hello-1`.
+- **Cause:** First apply uses Cloud Run’s hello placeholder (`us-docker.pkg.dev/cloudrun/container/hello`) so the service can exist before a real image is pushed. Terraform still set `command = ["uvicorn"]`. Cloud Run resolves `command` against a default PATH, not the image `PATH` (`/app/.venv/bin`). Hello has no uvicorn at all.
+- **Fix:** Skip worker `command`/`args` while `cloud_run_image` is the hello placeholder. On a real image, start `/app/.venv/bin/uvicorn app.worker.main:app`. Then `make tf-apply` (hello) followed by `make deploy-backend` (real image + worker entrypoint).
+- **Avoid next time:** Don’t override Cloud Run `command` to a PATH binary like `uvicorn`. Don’t assume first `tf-apply` already has the API image.

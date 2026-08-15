@@ -8,6 +8,7 @@ from typing import Any
 from litellm import acompletion
 
 from app.core.config import Settings
+from app.providers.llm.models import get_vertex_model
 from app.schema import ChatMessage
 from app.utils.logger import get_logger
 
@@ -38,6 +39,7 @@ class LiteLLMClient:
         if not settings.litellm_model:
             raise ValueError("LITELLM_MODEL is required")
 
+        self._settings = settings
         self._model = settings.litellm_model
         self._extra: dict[str, Any] = {}
         self._billing_labels: dict[str, str] | None = None
@@ -76,23 +78,57 @@ class LiteLLMClient:
             if base_url:
                 self._extra["api_base"] = base_url
 
+        if settings.gcp_project_id:
+            self._billing_labels = settings.billing_labels
+
         logger.info("Initialized LiteLLMClient model=%s", self._model)
+
+    def _vertex_kwargs(self, location: str) -> dict[str, Any]:
+        if not self._settings.gcp_project_id:
+            raise ValueError("GCP_PROJECT_ID is required for vertex_ai/* models")
+        extra: dict[str, Any] = {
+            "vertex_project": self._settings.gcp_project_id,
+            # LiteLLM pops either name; Model Garden defaults a missing location
+            # to us-central1 even when GCP_LOCATION=global.
+            "vertex_location": location,
+            "vertex_ai_location": location,
+        }
+        creds = self._settings.google_application_credentials
+        if creds:
+            extra["vertex_credentials"] = creds
+        return extra
+
+    def _completion_kwargs(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        model: str | None,
+        stream: bool,
+    ) -> dict[str, Any]:
+        resolved = model or self._model
+        catalog = get_vertex_model(resolved)
+        kwargs: dict[str, Any] = {"model": resolved, "messages": messages}
+        if catalog is not None:
+            kwargs.update(self._vertex_kwargs(catalog.location))
+            if self._billing_labels:
+                kwargs["labels"] = self._billing_labels
+        else:
+            kwargs.update(self._extra)
+            if self._billing_labels:
+                kwargs["labels"] = self._billing_labels
+        if stream:
+            kwargs["stream"] = True
+        return kwargs
 
     async def generate(
         self,
         messages: list[ChatMessage],
         *,
         system_instruction: str | None = None,
+        model: str | None = None,
     ) -> str:
         payload = self._build_payload(messages, system_instruction=system_instruction)
-
-        kwargs: dict[str, Any] = {
-            "model": self._model,
-            "messages": payload,
-            **self._extra,
-        }
-        if self._billing_labels:
-            kwargs["labels"] = self._billing_labels
+        kwargs = self._completion_kwargs(messages=payload, model=model, stream=False)
 
         response = await acompletion(**kwargs)
         text = response.choices[0].message.content
@@ -105,16 +141,10 @@ class LiteLLMClient:
         messages: list[ChatMessage],
         *,
         system_instruction: str | None = None,
+        model: str | None = None,
     ):
         payload = self._build_payload(messages, system_instruction=system_instruction)
-        kwargs: dict[str, Any] = {
-            "model": self._model,
-            "messages": payload,
-            "stream": True,
-            **self._extra,
-        }
-        if self._billing_labels:
-            kwargs["labels"] = self._billing_labels
+        kwargs = self._completion_kwargs(messages=payload, model=model, stream=True)
 
         stream = await acompletion(**kwargs)
         async for chunk in stream:

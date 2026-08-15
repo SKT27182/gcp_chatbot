@@ -23,10 +23,10 @@ variable "roles" {
   description = "Project-level IAM roles granted to the runtime service account"
   type        = list(string)
   default = [
-    "roles/aiplatform.user",             # Vertex AI / Gemini (LITELLM_MODEL=vertex_ai/*)
-    "roles/datastore.user",              # Firestore read/write (chat history)
+    "roles/aiplatform.user",              # Vertex AI / Gemini (LITELLM_MODEL=vertex_ai/*)
+    "roles/datastore.user",               # Firestore read/write (chat history)
     "roles/secretmanager.secretAccessor", # Read mounted secrets (e.g. LITELLM_API_KEY)
-    "roles/logging.logWriter",           # Send stdout logs to Cloud Logging
+    "roles/logging.logWriter",            # Send stdout logs to Cloud Logging
   ]
 }
 

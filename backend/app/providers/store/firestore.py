@@ -130,6 +130,7 @@ class FirestoreChatStore:
             first_user = next((m for m in messages if m.role == "user"), None)
             if first_user:
                 meta["title"] = _truncate(first_user.content, 60)
+                meta["title_source"] = "fallback"
 
         last = messages[-1] if messages else None
         if last:
@@ -199,4 +200,32 @@ class FirestoreChatStore:
 
         await session_ref.delete()
         logger.info("Deleted session_id=%s user_id=%s", session_id, user_id)
+        return True
+
+    async def update_session_title(
+        self,
+        session_id: str,
+        title: str,
+        *,
+        user_id: str | None = None,
+    ) -> bool:
+        session_ref = self._session_ref(session_id, user_id=user_id)
+        snap = await session_ref.get()
+        if not snap.exists:
+            return False
+        cleaned = _truncate(title, 60)
+        await session_ref.set(
+            {
+                "title": cleaned,
+                "title_source": "llm",
+                "updated_at": datetime.now(UTC),
+            },
+            merge=True,
+        )
+        logger.info(
+            "Updated session title session_id=%s user_id=%s title=%r",
+            session_id,
+            user_id,
+            cleaned,
+        )
         return True

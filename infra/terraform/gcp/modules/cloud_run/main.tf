@@ -1,4 +1,4 @@
-# Cloud Run service = HTTPS backend that runs the FastAPI container.
+# Cloud Run service = HTTPS backend that runs a container.
 # Identity: service_account_email (IAM module). Image: from Artifact Registry after deploy.
 
 variable "project_id" {
@@ -46,7 +46,7 @@ variable "labels" {
 }
 
 variable "allow_unauthenticated" {
-  description = "If true, anyone on the internet can invoke the URL (Phase-1 learning; lock down later)"
+  description = "If true, anyone on the internet can invoke the URL (SPA API; workers should be false)"
   type        = bool
   default     = true
 }
@@ -63,7 +63,7 @@ variable "max_instances" {
 }
 
 variable "timeout" {
-  description = "Request timeout for long SSE streams"
+  description = "Request timeout (SSE for API; short jobs for worker)"
   type        = string
   default     = "300s"
 }
@@ -78,20 +78,36 @@ variable "memory" {
   default = "512Mi"
 }
 
+variable "container_command" {
+  description = "Optional container entrypoint override (null = image CMD)"
+  type        = list(string)
+  default     = null
+}
+
+variable "container_args" {
+  description = "Optional container args override"
+  type        = list(string)
+  default     = null
+}
+
+variable "ingress" {
+  description = "Cloud Run ingress setting"
+  type        = string
+  default     = "INGRESS_TRAFFIC_ALL"
+}
+
 resource "google_cloud_run_v2_service" "api" {
   project  = var.project_id
   name     = var.service_name
   location = var.location
-  ingress  = "INGRESS_TRAFFIC_ALL" # reachable from the public internet (still needs invoker IAM)
+  ingress  = var.ingress
 
   # Allow terraform destroy / make tf-destroy (provider default is true = blocked)
   deletion_protection = false
 
   labels = var.labels
 
-  # New revisions use this template
   template {
-    # THIS is what ties Cloud Run → Firestore/Vertex: run as the IAM module's SA
     service_account = var.service_account_email
     labels          = var.labels
     timeout         = var.timeout
@@ -108,6 +124,12 @@ resource "google_cloud_run_v2_service" "api" {
         container_port = 8080 # must match Dockerfile / uvicorn
       }
 
+      # Optional: same image, different entrypoint (API vs worker).
+      # null = image CMD. Cloud Run resolves `command` against a default PATH
+      # (not the image ENV PATH), so callers must pass an absolute binary.
+      command = var.container_command
+      args    = var.container_args
+
       resources {
         limits = {
           cpu    = var.cpu
@@ -115,7 +137,6 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
-      # Plain env (GCP_PROJECT_ID, LITELLM_MODEL, …)
       dynamic "env" {
         for_each = var.env_vars
         content {
@@ -124,7 +145,6 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
-      # Secret env: value comes from Secret Manager (not visible as plain text in TF env map)
       dynamic "env" {
         for_each = var.secret_env_vars
         content {
@@ -140,7 +160,6 @@ resource "google_cloud_run_v2_service" "api" {
     }
   }
 
-  # Send all traffic to the newest revision
   traffic {
     type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
     percent = 100
@@ -165,4 +184,9 @@ output "service_uri" {
 
 output "service_name" {
   value = google_cloud_run_v2_service.api.name
+}
+
+output "service_id" {
+  description = "Full resource id for IAM / Pub/Sub bindings"
+  value       = google_cloud_run_v2_service.api.id
 }

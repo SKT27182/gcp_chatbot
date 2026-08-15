@@ -48,3 +48,13 @@ class ChatStore(Protocol):
     ) -> bool:
         """Delete a session and its messages. Return False if missing."""
         ...
+
+    async def update_session_title(
+        self,
+        session_id: str,
+        title: str,
+        *,
+        user_id: str | None = None,
+    ) -> bool:
+        """Set the session title. Return False if the session is missing."""
+        ...

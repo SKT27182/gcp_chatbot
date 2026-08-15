@@ -43,19 +43,37 @@ variable "artifact_repo" {
 }
 
 variable "runtime_service_account_id" {
-  description = "Short SA name created by modules/iam"
+  description = "Short SA name for the API Cloud Run service"
   type        = string
   default     = "gcp-chatbot-run"
 }
 
+variable "worker_service_account_id" {
+  description = "Short SA name for the worker Cloud Run service"
+  type        = string
+  default     = "gcp-chatbot-worker"
+}
+
+variable "pubsub_push_service_account_id" {
+  description = "Short SA name used by Pub/Sub OIDC to invoke the worker"
+  type        = string
+  default     = "gcp-chatbot-pubsub-push"
+}
+
 variable "cloud_run_service" {
-  description = "Cloud Run service name"
+  description = "API Cloud Run service name"
   type        = string
   default     = "gcp-chatbot-api"
 }
 
+variable "worker_cloud_run_service" {
+  description = "Worker Cloud Run service name"
+  type        = string
+  default     = "gcp-chatbot-worker"
+}
+
 variable "cloud_run_image" {
-  description = "Container image URL (set by make deploy-backend)"
+  description = "Container image URL (set by make deploy-backend) — shared by API + worker. Default is Cloud Run's hello placeholder so first make tf-apply can create the services before a real image exists."
   type        = string
   default     = "us-docker.pkg.dev/cloudrun/container/hello"
 }
@@ -67,7 +85,7 @@ variable "additional_env_vars" {
 }
 
 variable "allow_unauthenticated" {
-  description = "Public Cloud Run invoker (Phase-1 learning)"
+  description = "Public Cloud Run invoker for the API (Phase-1 learning)"
   type        = bool
   default     = true
 }
@@ -77,8 +95,37 @@ variable "max_instances" {
   default = 3
 }
 
+variable "worker_max_instances" {
+  type    = number
+  default = 3
+}
+
 variable "secret_ids" {
   description = "Secret Manager IDs to create (real values via make push-secrets)"
   type        = set(string)
   default     = ["litellm-api-key"]
+}
+
+variable "pubsub_topic_id" {
+  description = "Pub/Sub topic for async jobs"
+  type        = string
+  default     = "chat-jobs"
+}
+
+variable "pubsub_dlq_topic_id" {
+  description = "Dead-letter topic for failed job deliveries"
+  type        = string
+  default     = "chat-jobs-dlq"
+}
+
+variable "pubsub_subscription_id" {
+  description = "Push subscription that invokes the worker"
+  type        = string
+  default     = "chat-jobs-worker"
+}
+
+variable "pubsub_dlq_subscription_id" {
+  description = "Pull subscription on the DLQ for inspection"
+  type        = string
+  default     = "chat-jobs-dlq-pull"
 }

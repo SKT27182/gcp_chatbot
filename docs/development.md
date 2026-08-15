@@ -12,11 +12,12 @@
 | Secret / config | Where | Used for |
 |-----------------|-------|----------|
 | `GCP_PROJECT_ID` / `GCP_REGION` | Root `.env` | Local + deploy scripts + TF `-var`; also drives Hosting CORS |
-| `LITELLM_MODEL` / `GCP_LOCATION` | Root `.env` | Local API + Cloud Run via `additional_env_vars` |
+| `LITELLM_MODEL` / `GCP_LOCATION` | Root `.env` | Title-job default + omitted chat `model`; Cloud Run via `additional_env_vars` |
 | `CORS_ALLOWED_ORIGINS` | Root `.env` (optional) | Extra origins only; localhost + `*.web.app` are automatic |
 | `LITELLM_API_KEY` / `LITELLM_BASE_URL` | Root `.env` | API-key models + `make push-secrets` (not Vertex) |
 | `FIRESTORE_DATABASE` | Root `.env` | Local + optional Cloud Run override |
 | `FIREBASE_PROJECT_ID` | Root `.env` (optional) | When Firebase project id ≠ `GCP_PROJECT_ID` |
+| `JOBS_ENABLED` / `PUBSUB_TOPIC` | Root `.env` (optional locally) | Phase 3 title jobs; Cloud Run sets via Terraform |
 | `VITE_FIREBASE_*` | `frontend/.env` | Firebase Auth web config (build-time) |
 | Infra (`project_id`, `region`, `environment`) | `terraform.tfvars` | Terraform only |
 | Firestore + Firebase Admin local auth | `gcloud auth application-default login` | No JSON file needed |
@@ -32,6 +33,23 @@ Get an API key: [Google AI Studio](https://aistudio.google.com/apikey).
 4. Backend: same ADC as Firestore (`gcloud auth application-default login`) so `firebase-admin` can verify ID tokens.
 5. Smoke: sign in → send a message → confirm SSE tokens and a session under `users/{uid}/sessions/` in Firestore.
 
+## Phase 3 title jobs (local)
+
+- Default: `JOBS_ENABLED` is false → API uses `MemoryQueueClient` / `MemoryJobStore` (no Pub/Sub).
+- Chat still writes the truncated fallback title immediately.
+- Optional local worker: `make dev-worker` (port 8081). Against real GCP, set `JOBS_ENABLED=true` and `PUBSUB_TOPIC=chat-jobs` in root `.env` (same ADC as Firestore).
+- Pub/Sub emulator is optional; for learning, prefer deploying and watching the private worker logs after `make deploy-backend`.
+
+## Vertex chat models (local)
+
+- `GET /models` is public and returns the Vertex allowlist (Gemini, GPT-OSS, Llama, DeepSeek, Qwen, Gemma). Each entry has its own location (`global` vs `us-central1`).
+- The SPA picker stores the last choice in `localStorage` (`gcp-chatbot-session`) and sends `model` on `/chat` and `/chat/stream`.
+- Omitted `model` uses `LITELLM_MODEL` if that id is on the allowlist, otherwise `vertex_ai/gemini-3.5-flash-lite`.
+- Title jobs ignore the picker and always use `LITELLM_MODEL`.
+- Open/partner MaaS models (GPT-OSS / Llama / DeepSeek / Qwen / Gemma) must be **Enabled** in Vertex Model Garden for the same `GCP_PROJECT_ID`. Gemini works with existing `roles/aiplatform.user`.
+- A 429 `RESOURCE_EXHAUSTED` / `Quota exceeded for …_per_base_model` after Enable is Vertex quota (often 0 until you request an increase) — not a wrong model id.
+- Non-Gemini Vertex models also need the `google-cloud-aiplatform` package in the API image (LiteLLM imports `vertexai`).
+
 ## Make
 
 ```bash
@@ -40,6 +58,12 @@ make env
 make install
 make dev
 make test
+```
+
+Optional worker process:
+
+```bash
+make dev-worker
 ```
 
 ## Environment files

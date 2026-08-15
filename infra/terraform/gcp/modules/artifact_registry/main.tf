@@ -1,5 +1,6 @@
 # Private Docker image registry for the backend container.
-# make deploy-backend builds/pushes here; Cloud Run pulls the image from this repo.
+# make deploy-backend (BUILD=local) docker-pushes here; BUILD=gcp uses Cloud Build.
+# Cloud Run pulls the image from this repo.
 
 variable "project_id" {
   description = "GCP project ID"

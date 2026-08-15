@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     chat_history_limit: int = 20
     firestore_database: str = "(default)"
 
+    # Phase 3 — async title jobs via Pub/Sub (disabled locally unless explicitly enabled)
+    jobs_enabled: bool = False
+    pubsub_topic: str = ""
+    job_lease_seconds: int = 120
+
     @field_validator("log_level", mode="before")
     @classmethod
     def normalize_log_level(cls, value: object) -> str:

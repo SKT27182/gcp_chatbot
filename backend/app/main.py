@@ -11,9 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import chat, health
 from app.auth.firebase import init_firebase_admin
 from app.core.config import Settings, get_settings
+from app.providers.job_store.factory import create_job_store
 from app.providers.llm.factory import create_llm_client
+from app.providers.queue.factory import create_queue_client
 from app.providers.store.factory import create_chat_store
 from app.services.chat_service import ChatService
+from app.services.title_job_service import TitleJobService
 from app.utils.logger import get_logger, setup_logging
 
 
@@ -28,14 +31,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     llm = create_llm_client(settings)
     store = create_chat_store(settings)
-    app.state.chat_service = ChatService(llm=llm, store=store, settings=settings)
+    queue = create_queue_client(settings)
+    jobs = create_job_store(settings)
+    title_jobs = TitleJobService(queue=queue, jobs=jobs)
+    app.state.chat_service = ChatService(
+        llm=llm,
+        store=store,
+        settings=settings,
+        title_jobs=title_jobs,
+    )
+    app.state.queue_client = queue
+    app.state.job_store = jobs
+    app.state.title_job_service = title_jobs
 
     logger.info(
-        "App started name=%s env=%s model=%s auth_disabled=%s cors=%s",
+        "App started name=%s env=%s model=%s auth_disabled=%s jobs_enabled=%s cors=%s",
         settings.app_name,
         settings.environment,
         settings.litellm_model,
         settings.auth_disabled,
+        settings.jobs_enabled,
         settings.cors_origin_list,
     )
     yield

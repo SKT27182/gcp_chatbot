@@ -1,14 +1,42 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { ArrowUp, Loader2, Square } from "lucide-react"
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { ChatSidebar } from "@/features/chat/ChatSidebar"
 import { MessageList } from "@/features/chat/MessageList"
-import { deleteSession, getHealth, getSession, listSessions, streamChat } from "@/lib/api"
+import { ModelPicker } from "@/features/chat/ModelPicker"
+import { deleteSession, getSession, listModels, listSessions, streamChat } from "@/lib/api"
 import { useAuthStore } from "@/stores/authStore"
 import { buildLocalSessionSummary, titleFromMessage, useChatStore } from "@/stores/chatStore"
 
 import { LandingPage } from "@/features/auth/LandingPage"
 import { EmailVerificationPage } from "@/features/auth/EmailVerificationPage"
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Poll until the worker-written LLM title replaces the local fallback (or give up). */
+async function waitForGeneratedTitle(
+  fallbackTitle: string,
+  opts: {
+    fetchSessions: () => Promise<void>
+    getTitle: () => string | undefined
+    signal?: AbortSignal
+  },
+): Promise<void> {
+  // Worker is usually fast; cover cold-start with a short backoff window.
+  const delaysMs = [800, 1200, 2000, 3000, 4000, 5000]
+  for (const delay of delaysMs) {
+    if (opts.signal?.aborted) return
+    await sleep(delay)
+    if (opts.signal?.aborted) return
+    await opts.fetchSessions()
+    const title = opts.getTitle()
+    if (title && title !== fallbackTitle && title !== "New chat") {
+      return
+    }
+  }
+}
 
 export function ChatPage() {
   const queryClient = useQueryClient()
@@ -20,37 +48,45 @@ export function ChatPage() {
     draft,
     sessions,
     sidebarOpen,
+    selectedModel,
     setDraft,
     setSessionId,
     addMessage,
     appendToLastAssistant,
+    replaceLastAssistant,
+    removeLastEmptyAssistant,
     setSessions,
     upsertSession,
     removeSession,
-    patchSession,
     setSidebarOpen,
+    setSelectedModel,
     resetConversation,
     loadConversation,
   } = useChatStore()
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const titlePollAbortRef = useRef<AbortController | null>(null)
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [streamError, setStreamError] = useState<string | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
 
-  const healthQuery = useQuery({
-    queryKey: ["health"],
-    queryFn: getHealth,
-    staleTime: 60_000,
+  const modelsQuery = useQuery({
+    queryKey: ["models"],
+    queryFn: listModels,
+    staleTime: 5 * 60_000,
+    retry: 1,
   })
 
-  const activeModelName = useMemo(() => {
-    const rawModel = healthQuery.data?.model || "vertex_ai/gemini-3.5-flash-lite"
-    return rawModel.replace(/^(vertex_ai\/|gemini\/)/, "")
-  }, [healthQuery.data])
+  const catalog = modelsQuery.data
+  useEffect(() => {
+    if (!catalog) return
+    const ids = new Set(catalog.models.map((m) => m.id))
+    if (!selectedModel || !ids.has(selectedModel)) {
+      setSelectedModel(catalog.default)
+    }
+  }, [catalog, selectedModel, setSelectedModel])
 
   const sessionsQuery = useQuery({
     queryKey: ["sessions", user?.uid ?? "anon"],
@@ -77,55 +113,114 @@ export function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages, isStreaming])
 
+  useEffect(() => {
+    return () => {
+      titlePollAbortRef.current?.abort()
+    }
+  }, [])
+
+  async function refreshSessions() {
+    await queryClient.fetchQuery({
+      queryKey: ["sessions", user?.uid ?? "anon"],
+      queryFn: listSessions,
+    })
+  }
+
   async function handleSubmit(event?: FormEvent<HTMLFormElement>) {
     if (event) event.preventDefault()
     const message = draft.trim()
     if (!message || isStreaming || !user) return
 
-    setStreamError(null)
+    const isNewSession = !sessionId
+    const fallbackTitle = titleFromMessage(message)
     setLoadError(null)
     setDraft("")
     addMessage({ role: "user", content: message })
-    addMessage({ role: "assistant", content: "" })
+    addMessage({ role: "assistant", content: "", status: "streaming" })
     setIsStreaming(true)
 
     const controller = new AbortController()
     abortRef.current = controller
     let activeSessionId = sessionId
     let assistantText = ""
+    let completed = false
 
     try {
-      await streamChat(message, sessionId, {
-        signal: controller.signal,
-        onSession: (id) => {
-          activeSessionId = id
-          setSessionId(id)
+      await streamChat(
+        message,
+        sessionId,
+        {
+          signal: controller.signal,
+          onSession: (id) => {
+            activeSessionId = id
+            setSessionId(id)
+            // User turn is already persisted on the server at this point.
+            upsertSession({
+              session_id: id,
+              title: fallbackTitle,
+              preview: "",
+              updated_at: new Date().toISOString(),
+            })
+          },
+          onToken: (chunk) => {
+            assistantText += chunk
+            appendToLastAssistant(chunk)
+          },
+          onDone: (id) => {
+            completed = true
+            activeSessionId = id
+            setSessionId(id)
+            replaceLastAssistant({ content: assistantText, status: "done" })
+            upsertSession(buildLocalSessionSummary(id, message, assistantText || "…"))
+            void queryClient.invalidateQueries({ queryKey: ["sessions"] })
+
+            // Title job is async — poll until the sidebar picks up the LLM title.
+            if (isNewSession) {
+              titlePollAbortRef.current?.abort()
+              const poll = new AbortController()
+              titlePollAbortRef.current = poll
+              void waitForGeneratedTitle(fallbackTitle, {
+                signal: poll.signal,
+                fetchSessions: refreshSessions,
+                getTitle: () =>
+                  useChatStore.getState().sessions.find((s) => s.session_id === id)?.title,
+              })
+            }
+          },
+          onError: (detail) => {
+            // Option B: show error inline in the assistant bubble (UI-only).
+            replaceLastAssistant({
+              content: detail || "Failed to generate a reply. Please try again.",
+              status: "error",
+            })
+          },
         },
-        onToken: (chunk) => {
-          assistantText += chunk
-          appendToLastAssistant(chunk)
-        },
-        onDone: (id) => {
-          activeSessionId = id
-          setSessionId(id)
-          upsertSession(buildLocalSessionSummary(id, message, assistantText || "…"))
-          void queryClient.invalidateQueries({ queryKey: ["sessions"] })
-        },
-        onError: (detail) => {
-          setStreamError(detail)
-        },
-      })
+        selectedModel,
+      )
     } catch (error) {
-      if ((error as Error).name !== "AbortError") {
-        setStreamError((error as Error).message || "Failed to send message")
+      if ((error as Error).name === "AbortError") {
+        if (!assistantText) {
+          removeLastEmptyAssistant()
+        } else {
+          replaceLastAssistant({ content: assistantText, status: "cancelled" })
+        }
+      } else {
+        // onError already replaced the bubble for SSE errors; cover HTTP/network throws.
+        const detail = (error as Error).message || "Failed to send message"
+        replaceLastAssistant({ content: detail, status: "error" })
       }
     } finally {
       setIsStreaming(false)
       abortRef.current = null
-      if (activeSessionId) {
-        upsertSession(
-          buildLocalSessionSummary(activeSessionId, message, assistantText || "…"),
-        )
+      if (activeSessionId && !completed) {
+        // Refresh sidebar after abort/error — user message is in Firestore.
+        upsertSession({
+          session_id: activeSessionId,
+          title: fallbackTitle,
+          preview: assistantText ? titleFromMessage(assistantText) : "",
+          updated_at: new Date().toISOString(),
+        })
+        void queryClient.invalidateQueries({ queryKey: ["sessions"] })
       }
     }
   }
@@ -157,10 +252,7 @@ export function ChatPage() {
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }))
       loadConversation(history.session_id, chatMessages)
-      const firstUser = chatMessages.find((m) => m.role === "user")
-      if (firstUser) {
-        patchSession(history.session_id, { title: titleFromMessage(firstUser.content) })
-      }
+      // Do not overwrite server/LLM titles from the first user message.
       if (window.matchMedia("(max-width: 767px)").matches) {
         setSidebarOpen(false)
       }
@@ -173,8 +265,8 @@ export function ChatPage() {
 
   function handleNewChat() {
     abortRef.current?.abort()
+    titlePollAbortRef.current?.abort()
     resetConversation()
-    setStreamError(null)
     setLoadError(null)
     if (window.matchMedia("(max-width: 767px)").matches) {
       setSidebarOpen(false)
@@ -216,7 +308,7 @@ export function ChatPage() {
     return <EmailVerificationPage />
   }
 
-  const displaySessions = user ? (sessionsQuery.data ?? sessions) : []
+  const displaySessions = user ? sessions : []
   const inputDisabled = isStreaming || Boolean(loadingSessionId) || !user || authLoading
 
   return (
@@ -250,9 +342,6 @@ export function ChatPage() {
                 Sign in from the sidebar to chat and save history.
               </p>
             ) : null}
-            {streamError ? (
-              <p className="mb-2 text-center text-xs text-destructive">{streamError}</p>
-            ) : null}
             {loadError ? (
               <p className="mb-2 text-center text-xs text-destructive">{loadError}</p>
             ) : null}
@@ -274,10 +363,14 @@ export function ChatPage() {
 
               <div className="flex items-center justify-between pt-2 px-1 border-t border-border/30">
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                    {activeModelName}
-                  </div>
+                  <ModelPicker
+                    models={catalog?.models ?? []}
+                    selectedId={selectedModel}
+                    loading={modelsQuery.isPending}
+                    error={modelsQuery.isError}
+                    disabled={isStreaming || Boolean(loadingSessionId)}
+                    onSelect={setSelectedModel}
+                  />
                 </div>
 
                 {isStreaming ? (

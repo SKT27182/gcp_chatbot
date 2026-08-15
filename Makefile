@@ -14,11 +14,13 @@ endif
 
 GCP_PROJECT_ID ?= $(shell gcloud config get-value project 2>/dev/null)
 GCP_REGION ?= asia-south1
+BUILD ?= local
+export BUILD
 
 .DEFAULT_GOAL := help
 
 .PHONY: help install install-backend install-frontend env \
-	dev dev-backend dev-frontend \
+	dev dev-backend dev-frontend dev-worker \
 	test test-backend build build-frontend build-backend \
 	deploy deploy-backend deploy-frontend ensure-firebase show-outputs push-secrets \
 	tf-init tf-plan tf-apply tf-destroy delete-project lint
@@ -32,10 +34,12 @@ help: ## Show this help
 	@echo "Config: copy .env.example → .env at repo root (Make + deploy scripts read it)."
 	@echo "  GCP_PROJECT_ID   (from .env or gcloud config)"
 	@echo "  GCP_REGION       (default: asia-south1)"
+	@echo "  BUILD            (deploy-backend: local docker push, or gcp Cloud Build)"
 	@echo "  CORS            (auto: localhost + {GCP_PROJECT_ID}.web.app; optional CORS_ALLOWED_ORIGINS)"
 	@echo "  VITE_API_BASE_URL (frontend/.env — set Cloud Run URL after make show-outputs)"
 	@echo "  LITELLM_API_KEY  (root .env — API-key models only; skip for vertex_ai/*)"
 	@echo "  LITELLM_MODEL    (root .env — local + Cloud Run via deploy-backend)"
+	@echo "  JOBS_ENABLED     (Phase 3 title jobs; Cloud Run defaults true via Terraform)"
 	@echo "  Local Firestore: gcloud auth application-default login (or SA JSON path)"
 	@echo ""
 	@echo "Active project: $(or $(GCP_PROJECT_ID),<none>)"
@@ -66,6 +70,9 @@ dev: env ## Run API + Vite together (Ctrl+C stops both)
 
 dev-backend: ## Run FastAPI with reload on :8000
 	cd $(BACKEND) && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+dev-worker: ## Run title worker FastAPI on :8081 (optional; needs JOBS_ENABLED + Pub/Sub)
+	cd $(BACKEND) && uv run uvicorn app.worker.main:app --reload --host 0.0.0.0 --port 8081
 
 dev-frontend: ## Run Vite on :5173
 	cd $(FRONTEND) && pnpm dev
@@ -105,12 +112,12 @@ ifeq ($(strip $(GCP_PROJECT_ID)),)
 endif
 	$(ROOT)/scripts/push_secrets.sh
 
-deploy-backend: ## Build/push image + terraform apply (secrets mounted from SM)
+deploy-backend: ## docker buildx --push (default) or BUILD=gcp Cloud Build; then terraform apply
 ifeq ($(strip $(GCP_PROJECT_ID)),)
 	$(error No project set. Put GCP_PROJECT_ID in root .env, or: gcloud config set project YOUR_ID)
 endif
-	@echo "Using GCP_PROJECT_ID=$(GCP_PROJECT_ID)"
-	$(ROOT)/scripts/deploy_backend.sh
+	@echo "Using GCP_PROJECT_ID=$(GCP_PROJECT_ID) BUILD=$(BUILD)"
+	BUILD=$(BUILD) $(ROOT)/scripts/deploy_backend.sh
 
 deploy-frontend: ## Build + Firebase Hosting (needs VITE_API_BASE_URL in frontend/.env)
 	$(ROOT)/scripts/deploy_frontend.sh

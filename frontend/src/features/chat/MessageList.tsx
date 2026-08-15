@@ -147,10 +147,14 @@ export function MessageList({ messages, isPending, onSelectPrompt }: MessageList
             "max-w-[min(90%,44rem)] rounded-2xl px-4.5 py-3.5 text-sm leading-relaxed animate-in fade-in slide-in-from-bottom-2 duration-300",
             message.role === "user"
               ? "ml-auto bg-user text-foreground border border-border/80 shadow-xs"
-              : "mr-auto bg-assistant/60 text-foreground border border-border/50",
+              : message.status === "error"
+                ? "mr-auto bg-assistant/60 text-destructive border border-destructive/40"
+                : "mr-auto bg-assistant/60 text-foreground border border-border/50",
           )}
         >
           {message.role === "user" ? (
+            <div className="whitespace-pre-wrap">{message.content}</div>
+          ) : message.status === "error" ? (
             <div className="whitespace-pre-wrap">{message.content}</div>
           ) : (
             <ReactMarkdown
@@ -239,7 +243,10 @@ export function MessageList({ messages, isPending, onSelectPrompt }: MessageList
           Thinking…
         </div>
       ) : null}
-      {isPending && messages.at(-1)?.role === "assistant" && !messages.at(-1)?.content ? (
+      {isPending &&
+      messages.at(-1)?.role === "assistant" &&
+      !messages.at(-1)?.content &&
+      messages.at(-1)?.status !== "error" ? (
         <div className="mr-auto -mt-3 ml-4 text-xs text-muted-foreground">
           <span className="inline-flex gap-1">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-pink-400" />

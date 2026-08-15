@@ -3,7 +3,7 @@
 ## One-time setup
 
 1. GCP project + **billing** + budget alert (~$10–20; Vertex tokens are the main variable cost).
-2. Install `gcloud`, Docker, Terraform, Firebase CLI.
+2. Install `gcloud`, Docker, Terraform, Firebase CLI. Docker is required for the default local image push; skip it only if you always use `make deploy-backend BUILD=gcp`.
 3. Auth:
 
 ```bash
@@ -23,15 +23,23 @@ firebase login
 
 Default region: `asia-south1`.
 
-### Runtime service account
+### Runtime service accounts
 
-Terraform creates `gcp-chatbot-run` with: `aiplatform.user`, `datastore.user`, `secretmanager.secretAccessor`, `logging.logWriter`. Cloud Run uses this identity (ADC) — no API keys in the frontend.
+Terraform creates:
+
+| SA | Used by | Roles |
+|----|---------|-------|
+| `gcp-chatbot-run` | API Cloud Run | `aiplatform.user`, `datastore.user`, `secretmanager.secretAccessor`, `logging.logWriter` + topic `pubsub.publisher` |
+| `gcp-chatbot-worker` | Worker Cloud Run | same data/LLM roles as API |
+| `gcp-chatbot-pubsub-push` | Pub/Sub OIDC only | `roles/run.invoker` on the worker (no project-wide roles) |
+
+Cloud Run uses these identities (ADC) — no API keys in the frontend. The worker has **no** `allUsers` invoker binding.
 
 ## Terraform
 
 ```text
 infra/terraform/gcp/
-  modules/   # cloud_run, firestore, artifact_registry, secret_manager, iam
+  modules/   # cloud_run, firestore, artifact_registry, secret_manager, iam, pubsub
   envs/dev/  # composes modules (+ API enablement)
 ```
 
@@ -45,7 +53,9 @@ make tf-apply
 
 `terraform.tfvars` is infra-only. App env (`LITELLM_MODEL`, `GCP_LOCATION`, …) lives in root `.env` and is passed on `make deploy-backend` as `additional_env_vars`. CORS: localhost + Hosting URLs from `GCP_PROJECT_ID` are automatic.
 
-Suggested order: APIs → AR + IAM + Firestore + secrets → push first image → Cloud Run → `firebase deploy` for Hosting.
+Suggested order: APIs + placeholder Cloud Run (`make tf-apply`, hello image so the services exist) → first real image (`make deploy-backend`) → Pub/Sub push subscription is already in the same Terraform → `firebase deploy` for Hosting.
+
+First `make tf-apply` uses Cloud Run’s public `hello` image (`cloud_run_image` default) so API + worker can be created before Artifact Registry has a digest. The worker does **not** override container `command` on that placeholder (hello has no `uvicorn`). `make deploy-backend` then pins the real image and starts the worker with `/app/.venv/bin/uvicorn app.worker.main:app` — Cloud Run `command` is resolved against a default PATH, not the image `PATH`.
 
 ### Cost labels
 
@@ -56,9 +66,9 @@ Terraform applies GCP resource labels so Billing can filter this chatbot when ot
 | `env` | `dev` | provider `default_labels` + tfvars `environment` |
 | `app` | `chatbot` | provider `default_labels` + tfvars `app_name` |
 | `managed_by` | `terraform` | provider `default_labels` |
-| `service` | `cloud-run`, `artifact-registry`, `secret-manager` | per module |
+| `service` | `cloud-run`, `cloud-run-worker`, `pubsub`, `artifact-registry`, `secret-manager` | per module |
 
-**Labeled resources:** Cloud Run (service + revision template), Artifact Registry, Secret Manager.
+**Labeled resources:** Cloud Run (API + worker), Artifact Registry, Secret Manager, Pub/Sub topics/subscriptions.
 
 **Not labeled (API limitation):** API enablement, Firebase project/web app, Firestore DB (only Resource Manager tags, not simple labels), service accounts.
 
@@ -71,25 +81,41 @@ Terraform applies GCP resource labels so Billing can filter this chatbot when ot
 
 Firebase Hosting spend still shows under Firebase/Hosting product lines (not `labels.app`).
 
-## Backend (Cloud Run)
+## Backend (Cloud Run API + worker)
 
-Dockerfile: `uv sync --frozen`, port **8080**, CMD uvicorn.
+Dockerfile: `uv sync --frozen`, port **8080**, default CMD uvicorn API. Worker uses the **same image**; after `make deploy-backend`, Terraform sets `command` to `/app/.venv/bin/uvicorn` (Cloud Run does not search the image `PATH` for `command`) and `args` to `app.worker.main:app --host 0.0.0.0 --port 8080`. First `make tf-apply` leaves that override off so the hello placeholder can listen on 8080.
+
+`make deploy-backend` **builds on this machine** (`docker buildx --platform linux/amd64 --provenance=false --sbom=false --push`) and pins the Artifact Registry digest so Cloud Run rolls. Apple Silicon still needs those amd64 buildx flags on the local path; a default `docker build` is arm64 and Cloud Run rejects the OCI index.
+
+Opt into **Cloud Build in GCP** when you do not want a local Docker daemon (or want a guaranteed linux/amd64 builder):
 
 ```bash
-make deploy-backend
+make deploy-backend              # local docker push (default)
+make deploy-backend BUILD=gcp    # uploads backend/ only (see backend/.gcloudignore), builds in GCP
 make show-outputs
 ```
 
+`BUILD=gcp` is not a git push of the monorepo. Cloud Build zips `backend/` (minus `.venv`, tests, `.env`) to a GCS source bucket, then pushes the image to Artifact Registry. First Cloud Build needs `make tf-apply` (Cloud Build API + Artifact Registry writer IAM). Local `make build-backend` remains a no-push local tag.
+
 Cloud Run gets:
-- **Infra env from Terraform:** `GCP_PROJECT_ID`, `FIRESTORE_DATABASE`, labels, secrets mounts
+- **Infra env from Terraform:** `GCP_PROJECT_ID`, `FIRESTORE_DATABASE`, `JOBS_ENABLED=true`, `PUBSUB_TOPIC=chat-jobs`, labels, secrets mounts
 - **App env from root `.env`:** `LITELLM_MODEL`, `GCP_LOCATION`, … via `additional_env_vars`
 - **CORS:** localhost + `https://{GCP_PROJECT_ID}.web.app` (and `.firebaseapp.com`) built in the API; optional `CORS_ALLOWED_ORIGINS` for custom domains
 
-`make deploy-backend` builds/pushes the image and applies both.
+API Cloud Run stays **publicly invokable** for the SPA; Phase 2 locks chat/session routes with **Firebase Auth** (Bearer ID tokens). Request timeout defaults to `300s` for SSE.
 
-Cloud Run stays **publicly invokable** for the SPA; Phase 2 locks chat/session routes with **Firebase Auth** (Bearer ID tokens). Request timeout defaults to `300s` for SSE.
+Worker Cloud Run is **private**. Pub/Sub pushes to `/internal/pubsub/title` with an OIDC token from `gcp-chatbot-pubsub-push`. Set `audience` to the worker **service URI** (no path) — Cloud Run IAM checks `aud` against the origin, not `/internal/pubsub/title`. Failed deliveries retry then land on `chat-jobs-dlq`. Ack deadline is 120s (same as worker timeout / job lease). The worker returns **503** when a lease is held so Pub/Sub does not ACK a still-running job.
 
 `LITELLM_API_KEY` is mounted from Secret Manager when using API-key models (not plain `--set-env-vars`). Skip for `vertex_ai/*`. Firebase Auth does **not** use `make push-secrets`.
+
+### Pub/Sub title jobs
+
+1. After the first successful assistant turn, the API publishes `{ job_id: title:{session_id}, … }` to `chat-jobs`.
+2. Push subscription invokes the worker with OIDC `audience` = worker service URI; job status is stored under `users/{uid}/jobs/{job_id}`.
+3. Worker writes the LLM title onto `users/{uid}/sessions/{session_id}` (`title_source=llm`).
+4. Duplicate deliveries ACK with 200 once status is `succeeded`. A live lease returns 503 so Pub/Sub retries.
+
+Smoke after deploy: send a first message in a new chat → check Cloud Logging for the worker → confirm the sidebar title updates on the next session list refresh.
 
 ### Firebase Auth (deploy)
 
@@ -104,7 +130,7 @@ Cloud Run stays **publicly invokable** for the SPA; Phase 2 locks chat/session r
 - Always `LiteLLMClient`
 - Configure in root `.env` (`LITELLM_MODEL`, `GCP_LOCATION`; or `LITELLM_API_KEY` / optional `LITELLM_BASE_URL` for API-key models)
 - Local: FastAPI reads `.env`; Cloud Run: same vars injected on `make deploy-backend`
-- **Vertex:** no API key — ADC / Cloud Run SA
+- **Vertex:** no API key — ADC / Cloud Run SA. Chat picker uses `GET /models` (Vertex allowlist: Gemini, GPT-OSS, Llama, DeepSeek, Qwen, Gemma). Enable open/partner MaaS models once in Model Garden; Gemini is available with `roles/aiplatform.user`. Title jobs still use `LITELLM_MODEL`. If a new MaaS model 429s after Enable, request quota in IAM & Admin → Quotas.
 
 ### Firestore
 
@@ -164,7 +190,8 @@ make push-secrets
 ```bash
 make tf-apply        # APIs + SA, Firestore, secrets, Cloud Run (copy terraform.tfvars.example first)
 make push-secrets    # .env LITELLM_API_KEY → Secret Manager (skip if Vertex-only)
-make deploy-backend  # docker build/push + terraform apply (new image; secrets already mounted)
+make deploy-backend          # local docker buildx --push + terraform apply
+# make deploy-backend BUILD=gcp  # optional: Cloud Build in GCP instead of local Docker
 make show-outputs    # paste VITE_API_BASE_URL into frontend/.env
 make deploy-frontend # Firebase CLI (auto ensure-firebase)
 ```

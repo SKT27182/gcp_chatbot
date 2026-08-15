@@ -17,6 +17,7 @@ class LLMClient(Protocol):
         messages: list[ChatMessage],
         *,
         system_instruction: str | None = None,
+        model: str | None = None,
     ) -> str:
         """Return assistant text for the given message history."""
         ...
@@ -26,6 +27,7 @@ class LLMClient(Protocol):
         messages: list[ChatMessage],
         *,
         system_instruction: str | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         """Yield assistant text deltas for the given message history."""
         ...

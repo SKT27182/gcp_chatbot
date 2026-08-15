@@ -8,16 +8,20 @@ type ChatState = {
   draft: string
   sessions: SessionSummary[]
   sidebarOpen: boolean
+  selectedModel: string | null
   setDraft: (value: string) => void
   setSessionId: (sessionId: string | null) => void
   setMessages: (messages: ChatMessage[]) => void
   addMessage: (message: ChatMessage) => void
   appendToLastAssistant: (chunk: string) => void
+  replaceLastAssistant: (patch: Partial<ChatMessage> & { content: string }) => void
+  removeLastEmptyAssistant: () => void
   setSessions: (sessions: SessionSummary[]) => void
   upsertSession: (session: SessionSummary) => void
   removeSession: (sessionId: string) => void
   patchSession: (sessionId: string, patch: Partial<SessionSummary>) => void
   setSidebarOpen: (open: boolean) => void
+  setSelectedModel: (model: string) => void
   resetConversation: () => void
   loadConversation: (sessionId: string, messages: ChatMessage[]) => void
 }
@@ -36,6 +40,7 @@ export const useChatStore = create<ChatState>()(
       draft: "",
       sessions: [],
       sidebarOpen: true,
+      selectedModel: null,
       setDraft: (draft) => set({ draft }),
       setSessionId: (sessionId) => set({ sessionId }),
       setMessages: (messages) => set({ messages }),
@@ -48,22 +53,38 @@ export const useChatStore = create<ChatState>()(
           const messages = [...state.messages]
           const last = messages[messages.length - 1]
           if (!last || last.role !== "assistant") {
-            messages.push({ role: "assistant", content: chunk })
+            messages.push({ role: "assistant", content: chunk, status: "streaming" })
           } else {
             messages[messages.length - 1] = {
               ...last,
               content: last.content + chunk,
+              status: "streaming",
             }
           }
           return { messages }
+        }),
+      replaceLastAssistant: (patch) =>
+        set((state) => {
+          const messages = [...state.messages]
+          const last = messages[messages.length - 1]
+          if (!last || last.role !== "assistant") return state
+          messages[messages.length - 1] = { ...last, ...patch }
+          return { messages }
+        }),
+      removeLastEmptyAssistant: () =>
+        set((state) => {
+          const last = state.messages[state.messages.length - 1]
+          if (!last || last.role !== "assistant" || last.content) return state
+          return { messages: state.messages.slice(0, -1) }
         }),
       setSessions: (sessions) => set({ sessions }),
       upsertSession: (session) =>
         set((state) => {
           const existing = state.sessions.find((s) => s.session_id === session.session_id)
+          // Keep an existing sidebar title on follow-up upserts (local optimistic
+          // titles use the latest user message). Server refreshes use setSessions.
           const merged: SessionSummary = {
             ...session,
-            // Keep the first user query as the stable sidebar title.
             title: existing?.title || session.title,
           }
           const rest = state.sessions.filter((s) => s.session_id !== session.session_id)
@@ -89,6 +110,7 @@ export const useChatStore = create<ChatState>()(
           ),
         })),
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
+      setSelectedModel: (selectedModel) => set({ selectedModel }),
       resetConversation: () =>
         set({
           sessionId: null,
@@ -109,6 +131,7 @@ export const useChatStore = create<ChatState>()(
         messages: state.messages,
         sessions: state.sessions,
         sidebarOpen: state.sidebarOpen,
+        selectedModel: state.selectedModel,
       }),
     },
   ),
